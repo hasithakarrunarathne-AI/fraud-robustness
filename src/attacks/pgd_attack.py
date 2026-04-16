@@ -24,6 +24,7 @@ BATCH_SIZE = 1024
 THRESHOLD = 0.9
 
 
+
 def set_seed(seed=RANDOM_STATE):
     random.seed(seed)
     np.random.seed(seed)

@@ -1,10 +1,10 @@
 # src/defences/combined_defence.py
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import torch
-from pathlib import Path
-import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -12,7 +12,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.defences.noise_stability_defence import (
     THRESHOLD,
-    DEVICE,
     predict_probabilities,
     evaluate_noise_stability_for_sample,
 )
@@ -40,7 +39,7 @@ def apply_combined_defence(
 
     mlp_probs = predict_probabilities(mlp_model, X_test_np)
     mlp_preds = (mlp_probs >= threshold).astype(int)
-    
+
     total_samples = len(X_test_np)
 
     for i in range(total_samples):
@@ -78,7 +77,6 @@ def apply_combined_defence(
         )
 
         review_flag = int(noise_triggered or disagreement_triggered)
-
         final_action = "MANUAL_REVIEW" if review_flag == 1 else "ALLOW_NORMAL_PREDICTION"
 
         row = {
@@ -86,18 +84,15 @@ def apply_combined_defence(
             "true_label": int(y_test[i]),
             "target_prob": target_prob,
             "target_pred": target_pred,
-
             "noise_flip_rate": float(noise_row["flip_rate"]),
             "noise_prob_std": float(noise_row["perturbed_prob_std"]),
             "noise_gate_triggered": int(noise_triggered),
-
             "fraud_votes": int(disagreement_row["fraud_votes"]),
             "nonfraud_votes": int(disagreement_row["nonfraud_votes"]),
             "ensemble_prob_std": float(disagreement_row["ensemble_prob_std"]),
             "ensemble_prob_range": float(disagreement_row["ensemble_prob_range"]),
             "majority_margin": int(disagreement_row["majority_margin"]),
             "disagreement_gate_triggered": int(disagreement_triggered),
-
             "review_flag": int(review_flag),
             "final_action": final_action,
         }
@@ -107,7 +102,6 @@ def apply_combined_defence(
                 row[key] = value
 
         results.append(row)
-        
-    print(f"Finished processing {total_samples} / {total_samples} samples.")
 
+    print(f"Finished processing {total_samples} / {total_samples} samples.")
     return pd.DataFrame(results)

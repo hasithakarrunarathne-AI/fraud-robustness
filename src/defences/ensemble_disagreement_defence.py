@@ -18,13 +18,18 @@ def load_processed_data(processed_dir="data/processed"):
     return X_train, X_test, y_train, y_test
 
 
-def load_baseline_models(model_dir="results/saved_models"):
+def load_baseline_models(model_dir="results/saved_models", include_lr=True):
     models = {
-        "LogisticRegression": joblib.load(os.path.join(model_dir, "LogisticRegression.pkl")),
         "SVM": joblib.load(os.path.join(model_dir, "SVM.pkl")),
         "DecisionTree": joblib.load(os.path.join(model_dir, "DecisionTree.pkl")),
         "RandomForest": joblib.load(os.path.join(model_dir, "RandomForest.pkl")),
     }
+
+    if include_lr:
+        models["LogisticRegression"] = joblib.load(
+            os.path.join(model_dir, "LogisticRegression.pkl")
+        )
+
     return models
 
 
@@ -78,8 +83,8 @@ def apply_ensemble_disagreement_defence(
     models,
     X_data,
     threshold=THRESHOLD,
-    max_prob_std=0.20,
-    max_prob_range=0.60,
+    max_prob_std= 0.15, #0.20, # 0.15, #0.20,
+    max_prob_range=0.50, # 0.60,
     min_majority_margin=1,
 ):
     results = []

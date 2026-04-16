@@ -26,6 +26,13 @@ from src.defences.ensemble_disagreement_defence import load_baseline_models
 from src.defences.combined_defence import apply_combined_defence
 
 
+# ---------------------------------------------------
+# CHANGE THESE BEFORE EACH RUN
+# ---------------------------------------------------
+VARIANT_LABEL = "without_lr"      # "with_lr" or "without_lr"
+INCLUDE_LR = False              # True or False
+
+
 def set_seed(seed=RANDOM_STATE):
     random.seed(seed)
     np.random.seed(seed)
@@ -35,8 +42,10 @@ def set_seed(seed=RANDOM_STATE):
 
 
 def load_attack_files(sample_dir="results/attacks/samples"):
-   # return sorted(glob.glob(os.path.join(sample_dir, "*.npz")))
-    return sorted(glob.glob(os.path.join(sample_dir, "fgsm_eps_0p1.npz")))
+    target_file = os.path.join(sample_dir, "fgsm_eps_0p1.npz")
+    if os.path.exists(target_file):
+        return [target_file]
+    return []
 
 
 def summarize_defence(npz_data, review_flag):
@@ -94,6 +103,36 @@ def summarize_defence(npz_data, review_flag):
     }
 
 
+def build_detailed_review_df(npz_data, combined_df):
+    y_test = npz_data["y_test"].astype(int)
+    attacked_idx = npz_data["attacked_idx"].astype(int)
+    clean_preds = npz_data["clean_preds"].astype(int)
+    adv_preds = npz_data["adv_preds"].astype(int)
+    adv_probs = npz_data["adv_probs"].astype(np.float32)
+
+    n = len(y_test)
+
+    attacked_mask = np.zeros(n, dtype=bool)
+    attacked_mask[attacked_idx] = True
+
+    attempted_mask = attacked_mask & (y_test == 1) & (clean_preds == 1)
+    success_mask = attempted_mask & (adv_preds == 0)
+
+    detailed_df = combined_df.copy()
+    detailed_df["true_label"] = y_test
+    detailed_df["clean_pred"] = clean_preds
+    detailed_df["adv_pred"] = adv_preds
+    detailed_df["adv_prob"] = adv_probs
+    detailed_df["was_attacked"] = attacked_mask.astype(int)
+    detailed_df["successful_attack_before_defence"] = success_mask.astype(int)
+    detailed_df["caught_by_defence"] = (
+        (detailed_df["successful_attack_before_defence"] == 1)
+        & (detailed_df["review_flag"] == 1)
+    ).astype(int)
+
+    return detailed_df
+
+
 def main():
     set_seed()
 
@@ -103,13 +142,19 @@ def main():
         return
 
     mlp_model = load_mlp_model()
-    baseline_models = load_baseline_models()
+    baseline_models = load_baseline_models(include_lr=INCLUDE_LR)
+
+    if "RandomForest" in baseline_models:
+        baseline_models["RandomForest"].n_jobs = 1
+        print("Set RandomForest n_jobs to 1 for defence evaluation.")
+
     feature_names = pd.read_csv("data/processed/X_test.csv", nrows=1).columns.tolist()
 
     all_results = []
+    all_detailed = []
 
     for file_path in attack_files:
-        print(f"Running combined defence on: {file_path}")
+        print(f"\nRunning combined defence on: {file_path}")
         data = np.load(file_path, allow_pickle=True)
 
         X_adv = data["X_adv"].astype(np.float32)
@@ -133,23 +178,37 @@ def main():
         )
 
         review_flag = combined_df["review_flag"].values.astype(int)
+
         summary = summarize_defence(data, review_flag)
         summary["defence_name"] = "Combined"
-
+        summary["variant_label"] = VARIANT_LABEL
         all_results.append(summary)
+
+        detailed_df = build_detailed_review_df(data, combined_df)
+        detailed_df["attack_name"] = str(data["attack_name"])
+        detailed_df["epsilon"] = float(data["epsilon"])
+        detailed_df["variant_label"] = VARIANT_LABEL
+        all_detailed.append(detailed_df)
+
+        print(
+            f"Done: epsilon={summary['epsilon']:.3f} | "
+            f"caught={summary['successful_attacks_caught_by_defence']} / "
+            f"{summary['successful_attacks_before_defence']} | "
+            f"review_rate={summary['review_rate']:.4f}"
+        )
 
     os.makedirs("results/defences/on_attacks", exist_ok=True)
 
-    out_csv = "results/defences/on_attacks/combined_defence_on_attacks.csv"
-    out_json = "results/defences/on_attacks/combined_defence_on_attacks.json"
-
-    pd.DataFrame(all_results).to_csv(out_csv, index=False)
+    out_json = f"results/defences/on_attacks/combined_defence_on_attacks_{VARIANT_LABEL}.json"
+    out_csv = f"results/defences/on_attacks/combined_defence_details_{VARIANT_LABEL}.csv"
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=4)
 
-    print(f"Saved to {out_csv}")
-    print(f"Saved to {out_json}")
+    pd.concat(all_detailed, ignore_index=True).to_csv(out_csv, index=False)
+
+    print(f"\nSaved summary to {out_json}")
+    print(f"Saved details to {out_csv}")
 
 
 if __name__ == "__main__":

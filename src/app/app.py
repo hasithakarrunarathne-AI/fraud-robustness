@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 import torch
@@ -33,8 +34,18 @@ TRANSFER_PGD_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "transfer_pgd
 ZOO_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "zoo_results.json"
 
 NOISE_DEFENCE_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "noise_defence_on_attacks.json"
-DISAGREEMENT_DEFENCE_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_attacks.json"
-COMBINED_DEFENCE_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_attacks.json"
+
+DISAGREEMENT_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_attacks_with_lr.json"
+DISAGREEMENT_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_attacks_without_lr.json"
+
+DISAGREEMENT_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_with_lr.csv"
+DISAGREEMENT_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_without_lr.csv"
+
+COMBINED_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_attacks_with_lr.json"
+COMBINED_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_attacks_without_lr.json"
+
+COMBINED_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_with_lr.csv"
+COMBINED_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_without_lr.csv"
 
 THRESHOLD = 0.9
 
@@ -71,6 +82,15 @@ def get_clean_mlp_stats():
     model, X_train, X_test, y_train, y_test = load_mlp_model_and_data()
     metrics = evaluate_model(model, X_test, y_test)
     return metrics
+
+
+@st.cache_data
+def get_total_test_samples():
+    _, _, X_test, _, = None, None, None, None  # placeholder to keep style simple
+    X_train, X_test, y_train, y_test = load_processed_data(
+        processed_dir=str(PROJECT_ROOT / "data" / "processed")
+    )
+    return len(X_test)
 
 
 @st.cache_data
@@ -130,6 +150,17 @@ def load_defence_results(path: str):
         results = json.load(f)
 
     df = pd.DataFrame(results)
+    df = normalize_attack_labels(df)
+    return df
+
+
+@st.cache_data
+def load_csv_data(path: str):
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+
+    df = pd.read_csv(file_path)
     df = normalize_attack_labels(df)
     return df
 
@@ -218,6 +249,48 @@ def plot_defence_review_chart(row, title):
 
     plt.tight_layout()
     st.pyplot(fig)
+
+
+def plot_variant_rate_chart(with_row, without_row, title):
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    categories = ["Catch Rate", "Review Rate"]
+    with_vals = [
+        float(with_row["defence_catch_rate"]),
+        float(with_row["review_rate"]),
+    ]
+    without_vals = [
+        float(without_row["defence_catch_rate"]),
+        float(without_row["review_rate"]),
+    ]
+
+    x = range(len(categories))
+    width = 0.35
+
+    ax.bar([i - width / 2 for i in x], with_vals, width=width, label="With LR")
+    ax.bar([i + width / 2 for i in x], without_vals, width=width, label="Without LR")
+
+    ax.set_title(title, fontsize=11)
+    ax.set_ylabel("Rate", fontsize=9)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(categories, fontsize=9)
+    ax.tick_params(axis="y", labelsize=9)
+    ax.set_ylim(0, 1.05)
+    ax.legend(fontsize=9)
+    ax.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    st.pyplot(fig)
+
+
+def filter_by_attack_and_epsilon(df, selected_attack, selected_epsilon):
+    if df is None or df.empty:
+        return df
+
+    return df[
+        (df["attack_name"] == selected_attack)
+        & (np.isclose(df["epsilon"].astype(float), float(selected_epsilon), atol=1e-8))
+    ].copy()
 
 
 def format_delta(clean_value, adv_value):
@@ -680,7 +753,7 @@ Compared with white-box attacks, ZOO requires many more queries and larger pertu
 
 
 # ---------------------------------------------------
-# Defence section renderer
+# Generic defence section renderer
 # ---------------------------------------------------
 def render_defence_section(df, defence_label):
     if df is None or df.empty:
@@ -706,27 +779,30 @@ def render_defence_section(df, defence_label):
             index=len(epsilon_options) - 1,
             key=f"{defence_label}_epsilon_select"
         )
-        filtered_df = filtered_df[filtered_df["epsilon"] == selected_epsilon].copy()
+        filtered_df = filter_by_attack_and_epsilon(filtered_df, selected_attack, selected_epsilon)
 
     if filtered_df.empty:
         st.warning("No matching defence result found for the selected filters.")
         return
 
     row = filtered_df.iloc[0]
+    total_samples = get_total_test_samples()
+    review_count = int(round(float(row["review_rate"]) * total_samples))
 
     st.subheader(f"{defence_label} Key Result")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Successful Attacks Before", int(row["successful_attacks_before_defence"]))
     c2.metric("Caught by Defence", int(row["successful_attacks_caught_by_defence"]))
     c3.metric("Catch Rate", f"{row['defence_catch_rate']:.2%}")
     c4.metric("Review Rate", f"{row['review_rate']:.2%}")
+    c5.metric("Manual Review Count", review_count)
 
     st.info(
         f"For {row['attack_name']} at epsilon {row['epsilon']:.3f}, the {defence_label} "
         f"caught {int(row['successful_attacks_caught_by_defence'])} out of "
         f"{int(row['successful_attacks_before_defence'])} successful attacks, while reviewing "
-        f"{row['review_rate']:.2%} of transactions."
+        f"{review_count} transactions ({row['review_rate']:.2%})."
     )
 
     st.subheader(f"{defence_label} Summary Table")
@@ -798,6 +874,7 @@ and route suspicious transactions to manual review.
 - Successful Attacks Caught by Defence: **{int(row['successful_attacks_caught_by_defence'])}**
 - Defence Catch Rate: **{row['defence_catch_rate']:.2%}**
 - Review Rate: **{row['review_rate']:.2%}**
+- Manual Review Count: **{review_count}**
 
 **Interpretation note:**  
 The after-defence precision, F1, and PR-AUC values are shown for completeness, but they should be
@@ -808,6 +885,351 @@ binary classifier.
 {conclusion_text}
 """
     )
+
+
+# ---------------------------------------------------
+# Disagreement comparison renderer
+# ---------------------------------------------------
+def render_disagreement_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
+    if with_lr_df is None or with_lr_df.empty:
+        st.warning("Disagreement with-LR results file not found.")
+        return
+
+    if without_lr_df is None or without_lr_df.empty:
+        st.warning("Disagreement without-LR results file not found.")
+        return
+
+    st.success("Both disagreement comparison files loaded successfully.")
+
+    attack_options = sorted(with_lr_df["attack_name"].dropna().unique().tolist())
+    selected_attack = st.selectbox(
+        "Select attack type for disagreement comparison",
+        attack_options,
+        key="disagreement_compare_attack_select"
+    )
+
+    with_lr_filtered = with_lr_df[with_lr_df["attack_name"] == selected_attack].copy()
+    without_lr_filtered = without_lr_df[without_lr_df["attack_name"] == selected_attack].copy()
+
+    epsilon_options = sorted(with_lr_filtered["epsilon"].unique().tolist())
+    selected_epsilon = st.selectbox(
+        "Select epsilon for disagreement comparison",
+        epsilon_options,
+        index=len(epsilon_options) - 1,
+        key="disagreement_compare_epsilon_select"
+    )
+
+    with_lr_row = filter_by_attack_and_epsilon(with_lr_filtered, selected_attack, selected_epsilon).iloc[0]
+    without_lr_row = filter_by_attack_and_epsilon(without_lr_filtered, selected_attack, selected_epsilon).iloc[0]
+
+    with_lr_review_count = int(round(float(with_lr_row["review_rate"]) * total_samples))
+    without_lr_review_count = int(round(float(without_lr_row["review_rate"]) * total_samples))
+
+    st.subheader("Disagreement Defence Comparison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### With LR")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Caught", f"{int(with_lr_row['successful_attacks_caught_by_defence'])} / {int(with_lr_row['successful_attacks_before_defence'])}")
+        a2.metric("Catch Rate", f"{with_lr_row['defence_catch_rate']:.2%}")
+        a3.metric("Review Rate", f"{with_lr_row['review_rate']:.2%}")
+
+        b1, b2 = st.columns(2)
+        b1.metric("Manual Review Count", with_lr_review_count)
+        b2.metric("Recall After", f"{with_lr_row['defended_recall_after']:.4f}")
+
+    with col2:
+        st.markdown("### Without LR")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Caught", f"{int(without_lr_row['successful_attacks_caught_by_defence'])} / {int(without_lr_row['successful_attacks_before_defence'])}")
+        c2.metric("Catch Rate", f"{without_lr_row['defence_catch_rate']:.2%}")
+        c3.metric("Review Rate", f"{without_lr_row['review_rate']:.2%}")
+
+        d1, d2 = st.columns(2)
+        d1.metric("Manual Review Count", without_lr_review_count)
+        d2.metric("Recall After", f"{without_lr_row['defended_recall_after']:.4f}")
+
+    st.info(
+        f"For {selected_attack} at epsilon {selected_epsilon:.3f}, disagreement with LR caught "
+        f"{int(with_lr_row['successful_attacks_caught_by_defence'])} of "
+        f"{int(with_lr_row['successful_attacks_before_defence'])} successful attacks with about "
+        f"{with_lr_review_count} reviews, while disagreement without LR caught "
+        f"{int(without_lr_row['successful_attacks_caught_by_defence'])} with about "
+        f"{without_lr_review_count} reviews."
+    )
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        plot_variant_rate_chart(with_lr_row, without_lr_row, "Disagreement Defence: With LR vs Without LR")
+
+    with chart_col2:
+        compare_plot_df = pd.DataFrame({
+            "Variant": ["With LR", "Without LR"],
+            "Manual Review Count": [with_lr_review_count, without_lr_review_count],
+        })
+        plot_bar(compare_plot_df, "Variant", "Manual Review Count", "Manual Review Count Comparison", "Count")
+
+    compare_df = pd.DataFrame([
+        {
+            "Variant": "With LR",
+            "Attack": with_lr_row["attack_name"],
+            "Epsilon": round(float(with_lr_row["epsilon"]), 4),
+            "Successful Attacks Before": int(with_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(with_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(with_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(with_lr_row["review_rate"]), 4),
+            "Manual Review Count": with_lr_review_count,
+            "Recall After": round(float(with_lr_row["defended_recall_after"]), 4),
+        },
+        {
+            "Variant": "Without LR",
+            "Attack": without_lr_row["attack_name"],
+            "Epsilon": round(float(without_lr_row["epsilon"]), 4),
+            "Successful Attacks Before": int(without_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(without_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(without_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(without_lr_row["review_rate"]), 4),
+            "Manual Review Count": without_lr_review_count,
+            "Recall After": round(float(without_lr_row["defended_recall_after"]), 4),
+        },
+    ])
+
+    st.subheader("Comparison Table")
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    st.subheader("Exact Sample View")
+
+    sample_view_choice = st.radio(
+        "Select sample view",
+        ["Caught attack samples", "All flagged review samples"],
+        horizontal=True,
+        key="disagreement_sample_view_choice"
+    )
+
+    detail_variant = st.selectbox(
+        "Select detail variant",
+        ["With LR", "Without LR"],
+        key="disagreement_detail_variant_select"
+    )
+
+    detail_df = with_lr_details if detail_variant == "With LR" else without_lr_details
+
+    if detail_df is None or detail_df.empty:
+        st.info("Detailed sample file not found for this variant.")
+        return
+
+    detail_df = filter_by_attack_and_epsilon(detail_df, selected_attack, selected_epsilon)
+
+    if sample_view_choice == "Caught attack samples":
+        detail_df = detail_df[detail_df["caught_by_defence"] == 1].copy()
+    else:
+        detail_df = detail_df[detail_df["disagreement_gate_triggered"] == 1].copy()
+
+    if detail_df.empty:
+        st.info("No matching sample rows found for the selected filters.")
+        return
+
+    show_cols = [
+        "sample_index",
+        "true_label",
+        "clean_pred",
+        "adv_pred",
+        "adv_prob",
+        "was_attacked",
+        "successful_attack_before_defence",
+        "disagreement_gate_triggered",
+        "caught_by_defence",
+        "fraud_votes",
+        "nonfraud_votes",
+        "ensemble_prob_std",
+        "ensemble_prob_range",
+        "majority_margin",
+    ]
+
+    available_cols = [c for c in show_cols if c in detail_df.columns]
+    st.dataframe(detail_df[available_cols], use_container_width=True, height=300)
+
+    st.markdown(
+        """
+**Interpretation note:**  
+- **Manual Review Count** means how many transactions were flagged by the disagreement gate for further checking.  
+- **Caught attack samples** are the adversarially successful fraud cases that were later flagged by the defence.  
+- **All flagged review samples** shows the wider suspicious set, which explains the trade-off between stronger protection and user friction.
+"""
+    )
+
+
+# ---------------------------------------------------
+# Combined comparison renderer
+# ---------------------------------------------------
+def render_combined_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
+    if with_lr_df is None or with_lr_df.empty:
+        st.warning("Combined with-LR results file not found.")
+        return
+
+    if without_lr_df is None or without_lr_df.empty:
+        st.warning("Combined without-LR results file not found.")
+        return
+
+    st.success("Both combined comparison files loaded successfully.")
+
+    attack_options = sorted(with_lr_df["attack_name"].dropna().unique().tolist())
+    selected_attack = st.selectbox(
+        "Select attack type for combined comparison",
+        attack_options,
+        key="combined_compare_attack_select"
+    )
+
+    with_lr_filtered = with_lr_df[with_lr_df["attack_name"] == selected_attack].copy()
+    without_lr_filtered = without_lr_df[without_lr_df["attack_name"] == selected_attack].copy()
+
+    epsilon_options = sorted(with_lr_filtered["epsilon"].unique().tolist())
+    selected_epsilon = st.selectbox(
+        "Select epsilon for combined comparison",
+        epsilon_options,
+        index=len(epsilon_options) - 1,
+        key="combined_compare_epsilon_select"
+    )
+
+    with_lr_row = filter_by_attack_and_epsilon(with_lr_filtered, selected_attack, selected_epsilon).iloc[0]
+    without_lr_row = filter_by_attack_and_epsilon(without_lr_filtered, selected_attack, selected_epsilon).iloc[0]
+
+    with_lr_review_count = int(round(float(with_lr_row["review_rate"]) * total_samples))
+    without_lr_review_count = int(round(float(without_lr_row["review_rate"]) * total_samples))
+
+    st.subheader("Combined Defence Comparison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### With LR")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Caught", f"{int(with_lr_row['successful_attacks_caught_by_defence'])} / {int(with_lr_row['successful_attacks_before_defence'])}")
+        a2.metric("Catch Rate", f"{with_lr_row['defence_catch_rate']:.2%}")
+        a3.metric("Review Rate", f"{with_lr_row['review_rate']:.2%}")
+
+        b1, b2 = st.columns(2)
+        b1.metric("Manual Review Count", with_lr_review_count)
+        b2.metric("Recall After", f"{with_lr_row['defended_recall_after']:.4f}")
+
+    with col2:
+        st.markdown("### Without LR")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Caught", f"{int(without_lr_row['successful_attacks_caught_by_defence'])} / {int(without_lr_row['successful_attacks_before_defence'])}")
+        c2.metric("Catch Rate", f"{without_lr_row['defence_catch_rate']:.2%}")
+        c3.metric("Review Rate", f"{without_lr_row['review_rate']:.2%}")
+
+        d1, d2 = st.columns(2)
+        d1.metric("Manual Review Count", without_lr_review_count)
+        d2.metric("Recall After", f"{without_lr_row['defended_recall_after']:.4f}")
+
+    st.info(
+        f"For {selected_attack} at epsilon {selected_epsilon:.3f}, combined with LR caught "
+        f"{int(with_lr_row['successful_attacks_caught_by_defence'])} of "
+        f"{int(with_lr_row['successful_attacks_before_defence'])} successful attacks with about "
+        f"{with_lr_review_count} reviews, while combined without LR caught "
+        f"{int(without_lr_row['successful_attacks_caught_by_defence'])} with about "
+        f"{without_lr_review_count} reviews."
+    )
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        plot_variant_rate_chart(with_lr_row, without_lr_row, "Combined Defence: With LR vs Without LR")
+
+    with chart_col2:
+        compare_plot_df = pd.DataFrame({
+            "Variant": ["With LR", "Without LR"],
+            "Manual Review Count": [with_lr_review_count, without_lr_review_count],
+        })
+        plot_bar(compare_plot_df, "Variant", "Manual Review Count", "Manual Review Count Comparison", "Count")
+
+    compare_df = pd.DataFrame([
+        {
+            "Variant": "With LR",
+            "Attack": with_lr_row["attack_name"],
+            "Epsilon": round(float(with_lr_row["epsilon"]), 4),
+            "Successful Attacks Before": int(with_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(with_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(with_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(with_lr_row["review_rate"]), 4),
+            "Manual Review Count": with_lr_review_count,
+            "Recall After": round(float(with_lr_row["defended_recall_after"]), 4),
+        },
+        {
+            "Variant": "Without LR",
+            "Attack": without_lr_row["attack_name"],
+            "Epsilon": round(float(without_lr_row["epsilon"]), 4),
+            "Successful Attacks Before": int(without_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(without_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(without_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(without_lr_row["review_rate"]), 4),
+            "Manual Review Count": without_lr_review_count,
+            "Recall After": round(float(without_lr_row["defended_recall_after"]), 4),
+        },
+    ])
+
+    st.subheader("Comparison Table")
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    st.subheader("Exact Sample View")
+
+    sample_view_choice = st.radio(
+        "Select sample view",
+        ["Caught attack samples", "All flagged review samples"],
+        horizontal=True,
+        key="combined_sample_view_choice"
+    )
+
+    detail_variant = st.selectbox(
+        "Select detail variant",
+        ["With LR", "Without LR"],
+        key="combined_detail_variant_select"
+    )
+
+    detail_df = with_lr_details if detail_variant == "With LR" else without_lr_details
+
+    if detail_df is None or detail_df.empty:
+        st.info("Detailed sample file not found for this variant.")
+        return
+
+    detail_df = filter_by_attack_and_epsilon(detail_df, selected_attack, selected_epsilon)
+
+    if sample_view_choice == "Caught attack samples":
+        detail_df = detail_df[detail_df["caught_by_defence"] == 1].copy()
+    else:
+        detail_df = detail_df[detail_df["review_flag"] == 1].copy()
+
+    if detail_df.empty:
+        st.info("No matching sample rows found for the selected filters.")
+        return
+
+    show_cols = [
+        "sample_index",
+        "true_label",
+        "clean_pred",
+        "adv_pred",
+        "adv_prob",
+        "was_attacked",
+        "successful_attack_before_defence",
+        "noise_gate_triggered",
+        "disagreement_gate_triggered",
+        "review_flag",
+        "caught_by_defence",
+        "fraud_votes",
+        "nonfraud_votes",
+        "ensemble_prob_std",
+        "ensemble_prob_range",
+        "majority_margin",
+        "noise_flip_rate",
+        "noise_prob_std",
+    ]
+
+    available_cols = [c for c in show_cols if c in detail_df.columns]
+    st.dataframe(detail_df[available_cols], use_container_width=True, height=300)
 
 
 # ---------------------------------------------------
@@ -991,8 +1413,8 @@ with tab_noise:
 with tab_disagreement:
     st.subheader("Ensemble Disagreement Defence Analysis")
     st.write(
-        "This section shows whether the ensemble-disagreement defence can intercept successful "
-        "adversarial evasions and route them to manual review."
+        "This section compares disagreement defence with and without Logistic Regression in the ensemble, "
+        "so the trade-off between stronger protection and lower review overhead can be demonstrated clearly."
     )
 
     if "show_disagreement_defence" not in st.session_state:
@@ -1002,16 +1424,29 @@ with tab_disagreement:
         st.session_state.show_disagreement_defence = True
 
     if st.session_state.show_disagreement_defence:
-        disagreement_df = load_defence_results(str(DISAGREEMENT_DEFENCE_RESULTS_PATH))
-        render_defence_section(disagreement_df, "Ensemble Disagreement")
+        total_samples = get_total_test_samples()
+
+        disagreement_with_lr_df = load_defence_results(str(DISAGREEMENT_WITH_LR_RESULTS_PATH))
+        disagreement_without_lr_df = load_defence_results(str(DISAGREEMENT_WITHOUT_LR_RESULTS_PATH))
+
+        disagreement_with_lr_details = load_csv_data(str(DISAGREEMENT_WITH_LR_DETAILS_PATH))
+        disagreement_without_lr_details = load_csv_data(str(DISAGREEMENT_WITHOUT_LR_DETAILS_PATH))
+
+        render_disagreement_comparison_section(
+            disagreement_with_lr_df,
+            disagreement_without_lr_df,
+            disagreement_with_lr_details,
+            disagreement_without_lr_details,
+            total_samples,
+        )
     else:
         st.info("Click 'Show Ensemble Disagreement Results' to review defence effectiveness.")
 
 with tab_combined:
     st.subheader("Combined Defence Analysis")
     st.write(
-        "This section shows the final per-transaction combined defence policy, where a transaction "
-        "is routed to manual review if either defence gate flags it as suspicious."
+        "This section compares combined defence with and without Logistic Regression in the ensemble. "
+        "The final combined policy routes a transaction to manual review if either defence gate flags it."
     )
 
     if "show_combined_defence" not in st.session_state:
@@ -1021,7 +1456,20 @@ with tab_combined:
         st.session_state.show_combined_defence = True
 
     if st.session_state.show_combined_defence:
-        combined_df = load_defence_results(str(COMBINED_DEFENCE_RESULTS_PATH))
-        render_defence_section(combined_df, "Combined Defence")
+        total_samples = get_total_test_samples()
+
+        combined_with_lr_df = load_defence_results(str(COMBINED_WITH_LR_RESULTS_PATH))
+        combined_without_lr_df = load_defence_results(str(COMBINED_WITHOUT_LR_RESULTS_PATH))
+
+        combined_with_lr_details = load_csv_data(str(COMBINED_WITH_LR_DETAILS_PATH))
+        combined_without_lr_details = load_csv_data(str(COMBINED_WITHOUT_LR_DETAILS_PATH))
+
+        render_combined_comparison_section(
+            combined_with_lr_df,
+            combined_without_lr_df,
+            combined_with_lr_details,
+            combined_without_lr_details,
+            total_samples,
+        )
     else:
         st.info("Click 'Show Combined Defence Results' to review defence effectiveness.")

@@ -118,10 +118,10 @@ def main():
             model=mlp_model,
             X_data=X_adv,
             threshold=THRESHOLD,
-            noise_std=0.01,
-            n_perturbations=20,
-            max_flip_rate=0.30,
-            max_prob_std=0.10,
+            noise_std=0.03, # 0.01
+            n_perturbations=30, # 20
+            max_flip_rate=0.20, # 0.30
+            max_prob_std=0.05, # 0.10    
         )
 
         review_flag = noise_df["noise_gate_triggered"].values.astype(int)
