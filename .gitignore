@@ -1,0 +1,116 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# -----------------------------
+# VS Code / IDE
+# -----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -----------------------------
+# OS files
+# -----------------------------
+.DS_Store
+Thumbs.db
+
+# -----------------------------
+# Environment / secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# -----------------------------
+# Logs
+# -----------------------------
+*.log
+logs/
+mlruns/
+
+# -----------------------------
+# Python build / packaging
+# -----------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# -----------------------------
+# Testing / coverage
+# -----------------------------
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# -----------------------------
+# Data files
+# -----------------------------
+data/raw/
+data/interim/
+data/processed/
+*.csv
+*.xlsx
+*.parquet
+*.pkl
+*.joblib
+
+# Keep folder structure if needed
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# -----------------------------
+# Model artifacts
+# -----------------------------
+models/*.pkl
+models/*.joblib
+models/*.pt
+models/*.pth
+models/*.onnx
+checkpoints/
+artifacts/
+
+# -----------------------------
+# Outputs / generated files
+# -----------------------------
+outputs/
+results/
+reports/generated/
+graphs/
+figures/
+
+# -----------------------------
+# Streamlit cache
+# -----------------------------
+.streamlit/cache/
+
+# -----------------------------
+# Temporary files
+# -----------------------------
+tmp/
+temp/
+*.tmp
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.bak
+*.old
