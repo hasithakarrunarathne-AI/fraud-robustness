@@ -1,9 +1,8 @@
-# src/defences/run_disagreement_defence_on_attacks.py
+# src/defences/run_combined_defence_on_zoo_attacks.py
 
 import os
 import sys
 import json
-import glob
 import random
 from pathlib import Path
 
@@ -17,30 +16,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from src.defences.noise_stability_defence import RANDOM_STATE
-from src.defences.ensemble_disagreement_defence import (
+from src.defences.noise_stability_defence import (
+    RANDOM_STATE,
     THRESHOLD,
-    load_baseline_models,
-    apply_ensemble_disagreement_defence,
+    load_mlp_model,
 )
+from src.defences.ensemble_disagreement_defence import load_baseline_models
+from src.defences.combined_defence import apply_combined_defence
 
 
 # ---------------------------------------------------
-# CHANGE THIS LABEL before each run
-# Use "with_lr" or "without_lr"
+# CHANGE THESE BEFORE EACH RUN
 # ---------------------------------------------------
-VARIANT_LABEL = "without_lr"
-include_lr = False
+VARIANT_LABEL = "without_lr"   # "with_lr" or "without_lr"
+INCLUDE_LR = False             # True or False
 
-# ---------------------------------------------------
-# SELECT REPRESENTATIVE ATTACK FILES FOR DEFENCE TESTING
-# ---------------------------------------------------
 TARGET_ATTACK_FILES = [
-    "results/attacks/samples/fgsm_eps_0p1.npz",
-    "results/attacks/samples/pgd_eps_0p2.npz",
-    "results/attacks/samples/transfer_fgsm_eps_0p1.npz",
-    "results/attacks/samples/transfer_pgd_eps_0p2.npz",
+    "results/attacks/samples/zoo_attack_logisticregression.npz",
+    "results/attacks/samples/zoo_attack_svm.npz",
+    "results/attacks/samples/zoo_attack_decisiontree.npz",
+    "results/attacks/samples/zoo_attack_randomforest.npz",
+    "results/attacks/samples/zoo_attack_mlp_torch.npz",
 ]
+
+NOISE_STD = 0.01
+N_PERTURBATIONS = 20
+MAX_FLIP_RATE = 0.30
+MAX_PROB_STD_NOISE = 0.10
+MAX_PROB_STD_ENSEMBLE = 0.20
+MAX_PROB_RANGE_ENSEMBLE = 0.60
+MIN_MAJORITY_MARGIN = 1
 
 
 def set_seed(seed=RANDOM_STATE):
@@ -51,9 +56,7 @@ def set_seed(seed=RANDOM_STATE):
         torch.cuda.manual_seed_all(seed)
 
 
-def load_attack_files(sample_dir="results/attacks/samples"):
-    #return sorted(glob.glob(os.path.join(sample_dir, "*.npz")))
-    #return sorted(glob.glob(os.path.join(sample_dir, "fgsm_eps_0p1.npz")))
+def load_attack_files():
     existing_files = []
     missing_files = []
 
@@ -64,7 +67,7 @@ def load_attack_files(sample_dir="results/attacks/samples"):
             missing_files.append(file_path)
 
     if missing_files:
-        print("These configured attack files were not found:")
+        print("These configured ZOO attack files were not found:")
         for file_path in missing_files:
             print(f" - {file_path}")
 
@@ -108,9 +111,14 @@ def summarize_defence(npz_data, review_flag):
     defended_f1 = f1_score(y_test, defended_preds, zero_division=0)
     defended_pr_auc = average_precision_score(y_test, defended_scores)
 
+    attack_name = str(npz_data["attack_name"])
+    target_model = str(npz_data["target_model"]) if "target_model" in npz_data.files else "Unknown"
+    epsilon = float(npz_data["epsilon"]) if "epsilon" in npz_data.files else -1.0
+
     return {
-        "attack_name": str(npz_data["attack_name"]),
-        "epsilon": float(npz_data["epsilon"]),
+        "attack_name": attack_name,
+        "target_model": target_model,
+        "epsilon": epsilon,
         "successful_attacks_before_defence": successful_attacks_before,
         "successful_attacks_caught_by_defence": successful_attacks_caught,
         "defence_catch_rate": float(catch_rate),
@@ -126,7 +134,7 @@ def summarize_defence(npz_data, review_flag):
     }
 
 
-def build_detailed_review_df(npz_data, disagreement_df):
+def build_detailed_review_df(npz_data, combined_df):
     y_test = npz_data["y_test"].astype(int)
     attacked_idx = npz_data["attacked_idx"].astype(int)
     clean_preds = npz_data["clean_preds"].astype(int)
@@ -141,7 +149,7 @@ def build_detailed_review_df(npz_data, disagreement_df):
     attempted_mask = attacked_mask & (y_test == 1) & (clean_preds == 1)
     success_mask = attempted_mask & (adv_preds == 0)
 
-    detailed_df = disagreement_df.copy()
+    detailed_df = combined_df.copy()
     detailed_df["true_label"] = y_test
     detailed_df["clean_pred"] = clean_preds
     detailed_df["adv_pred"] = adv_preds
@@ -150,7 +158,7 @@ def build_detailed_review_df(npz_data, disagreement_df):
     detailed_df["successful_attack_before_defence"] = success_mask.astype(int)
     detailed_df["caught_by_defence"] = (
         (detailed_df["successful_attack_before_defence"] == 1)
-        & (detailed_df["disagreement_gate_triggered"] == 1)
+        & (detailed_df["review_flag"] == 1)
     ).astype(int)
 
     return detailed_df
@@ -161,11 +169,16 @@ def main():
 
     attack_files = load_attack_files()
     if not attack_files:
-        print("No attacked sample files found in results/attacks/samples")
+        print("No matching ZOO attacked sample files found in results/attacks/samples")
         return
-  
-    baseline_models = load_baseline_models(include_lr=include_lr)
 
+    print(f"Running ZOO combined defence variant: {VARIANT_LABEL}")
+    print("Attack files selected for defence evaluation:")
+    for file_path in attack_files:
+        print(f" - {file_path}")
+
+    mlp_model = load_mlp_model()
+    baseline_models = load_baseline_models(include_lr=INCLUDE_LR)
 
     if "RandomForest" in baseline_models:
         baseline_models["RandomForest"].n_jobs = 1
@@ -177,50 +190,69 @@ def main():
     all_detailed = []
 
     for file_path in attack_files:
-        print(f"\nRunning disagreement defence on: {file_path}")
+        print(f"\nRunning combined defence on ZOO file: {file_path}")
         data = np.load(file_path, allow_pickle=True)
 
         X_adv = data["X_adv"].astype(np.float32)
+        y_test = data["y_test"].astype(int)
         X_adv_df = pd.DataFrame(X_adv, columns=feature_names)
 
-        disagreement_df = apply_ensemble_disagreement_defence(
-            models=baseline_models,
-            X_data=X_adv_df,
+        combined_df = apply_combined_defence(
+            mlp_model=mlp_model,
+            baseline_models=baseline_models,
+            X_test_np=X_adv,
+            X_test_df=X_adv_df,
+            y_test=y_test,
             threshold=THRESHOLD,
-            max_prob_std=0.20,
-            max_prob_range=0.60,
-            min_majority_margin=1,
+            noise_std=NOISE_STD,
+            n_perturbations=N_PERTURBATIONS,
+            max_flip_rate=MAX_FLIP_RATE,
+            max_prob_std_noise=MAX_PROB_STD_NOISE,
+            max_prob_std_ensemble=MAX_PROB_STD_ENSEMBLE,
+            max_prob_range_ensemble=MAX_PROB_RANGE_ENSEMBLE,
+            min_majority_margin=MIN_MAJORITY_MARGIN,
         )
 
-        review_flag = disagreement_df["disagreement_gate_triggered"].values.astype(int)
+        review_flag = combined_df["review_flag"].values.astype(int)
 
         summary = summarize_defence(data, review_flag)
-        summary["defence_name"] = "EnsembleDisagreement"
+        summary["defence_name"] = "Combined"
         summary["variant_label"] = VARIANT_LABEL
         all_results.append(summary)
 
-        detailed_df = build_detailed_review_df(data, disagreement_df)
+        detailed_df = build_detailed_review_df(data, combined_df)
         detailed_df["attack_name"] = str(data["attack_name"])
-        detailed_df["epsilon"] = float(data["epsilon"])
+        detailed_df["target_model"] = str(data["target_model"]) if "target_model" in data.files else "Unknown"
+        detailed_df["epsilon"] = float(data["epsilon"]) if "epsilon" in data.files else -1.0
         detailed_df["variant_label"] = VARIANT_LABEL
         all_detailed.append(detailed_df)
 
         print(
-            f"Done: epsilon={summary['epsilon']:.3f} | "
+            f"Done: target_model={summary['target_model']} | "
             f"caught={summary['successful_attacks_caught_by_defence']} / "
             f"{summary['successful_attacks_before_defence']} | "
             f"review_rate={summary['review_rate']:.4f}"
         )
 
+    all_results = sorted(
+        all_results,
+        key=lambda x: (str(x["attack_name"]), str(x["target_model"]))
+    )
+
+    final_details_df = pd.concat(all_detailed, ignore_index=True)
+    final_details_df = final_details_df.sort_values(
+        by=["attack_name", "target_model", "sample_index"]
+    ).reset_index(drop=True)
+
     os.makedirs("results/defences/on_attacks", exist_ok=True)
 
-    out_json = f"results/defences/on_attacks/disagreement_defence_on_attacks_{VARIANT_LABEL}.json"
-    out_csv = f"results/defences/on_attacks/disagreement_defence_details_{VARIANT_LABEL}.csv"
+    out_json = f"results/defences/on_attacks/combined_defence_on_zoo_attacks_{VARIANT_LABEL}.json"
+    out_csv = f"results/defences/on_attacks/combined_defence_details_zoo_{VARIANT_LABEL}.csv"
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=4)
 
-    pd.concat(all_detailed, ignore_index=True).to_csv(out_csv, index=False)
+    final_details_df.to_csv(out_csv, index=False)
 
     print(f"\nSaved summary to {out_json}")
     print(f"Saved details to {out_csv}")

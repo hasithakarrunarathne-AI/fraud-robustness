@@ -1,5 +1,3 @@
-# src/attacks/transfer_pgd_attack.py
-
 import os
 import json
 import random
@@ -24,6 +22,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 THRESHOLD_MLP = 0.9
 BATCH_SIZE = 1024
+
+attack_name = "TRANSFER_PGD"
+
+os.makedirs("results/attacks/samples", exist_ok=True)
 
 
 def set_seed(seed=RANDOM_STATE):
@@ -260,8 +262,11 @@ def run_transfer_pgd():
     all_results = []
 
     X_test_np = X_test.values.astype(np.float32)
+    feature_names = X_test.columns.tolist()
 
     for epsilon in epsilons:
+        safe_eps = str(epsilon).replace(".", "p")
+
         print(f"\n{'=' * 70}")
         print(f"Running transfer PGD with epsilon = {epsilon}, alpha = {alpha}, steps = {num_steps}")
         print(f"{'=' * 70}")
@@ -276,6 +281,35 @@ def run_transfer_pgd():
         )
 
         X_test_adv = pd.DataFrame(X_test_adv_np, columns=X_test.columns)
+
+        source_clean_metrics, source_clean_probs, source_clean_preds = evaluate_torch_mlp(
+            source_mlp, X_test_np, y_test
+        )
+        source_adv_metrics, source_adv_probs, source_adv_preds = evaluate_torch_mlp(
+            source_mlp, X_test_adv_np, y_test
+        )
+
+        np.savez_compressed(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz",
+            X_adv=X_test_adv_np.astype(np.float32),
+            y_test=y_test.astype(np.int32),
+            attacked_idx=np.array(attacked_idx, dtype=np.int32),
+            clean_probs=source_clean_probs.astype(np.float32),
+            clean_preds=source_clean_preds.astype(np.int32),
+            adv_probs=source_adv_probs.astype(np.float32),
+            adv_preds=source_adv_preds.astype(np.int32),
+            attack_name=np.array(attack_name),
+            epsilon=np.float32(epsilon),
+        )
+
+        adv_df = pd.DataFrame(X_test_adv_np, columns=feature_names)
+        adv_df.to_csv(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv",
+            index=False
+        )
+
+        print(f"Saved attacked samples to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz")
+        print(f"Saved attacked CSV to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv")
 
         # sklearn target models
         for target_name, target_model in target_models.items():

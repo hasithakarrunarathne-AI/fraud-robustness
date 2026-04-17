@@ -32,6 +32,16 @@ from src.defences.combined_defence import apply_combined_defence
 VARIANT_LABEL = "without_lr"      # "with_lr" or "without_lr"
 INCLUDE_LR = False              # True or False
 
+# ---------------------------------------------------
+# SELECT REPRESENTATIVE ATTACK FILES FOR DEFENCE TESTING
+# ---------------------------------------------------
+TARGET_ATTACK_FILES = [
+    "results/attacks/samples/fgsm_eps_0p1.npz",
+    "results/attacks/samples/pgd_eps_0p2.npz",
+    "results/attacks/samples/transfer_fgsm_eps_0p1.npz",
+    "results/attacks/samples/transfer_pgd_eps_0p2.npz",
+]
+
 
 def set_seed(seed=RANDOM_STATE):
     random.seed(seed)
@@ -42,10 +52,23 @@ def set_seed(seed=RANDOM_STATE):
 
 
 def load_attack_files(sample_dir="results/attacks/samples"):
-    target_file = os.path.join(sample_dir, "fgsm_eps_0p1.npz")
-    if os.path.exists(target_file):
-        return [target_file]
-    return []
+    #return sorted(glob.glob(os.path.join(sample_dir, "*.npz")))
+    #return sorted(glob.glob(os.path.join(sample_dir, "fgsm_eps_0p1.npz")))
+    existing_files = []
+    missing_files = []
+
+    for file_path in TARGET_ATTACK_FILES:
+        if os.path.exists(file_path):
+            existing_files.append(file_path)
+        else:
+            missing_files.append(file_path)
+
+    if missing_files:
+        print("These configured attack files were not found:")
+        for file_path in missing_files:
+            print(f" - {file_path}")
+
+    return existing_files
 
 
 def summarize_defence(npz_data, review_flag):

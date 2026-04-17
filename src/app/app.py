@@ -1,5 +1,3 @@
-# src/app/app.py
-
 import json
 import sys
 from pathlib import Path
@@ -18,8 +16,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from src.models.train_mlp_torch_v2 import FraudMLP, load_processed_data, evaluate_model, DEVICE
-# If needed, change above import to:
-# from src.models.train_mlp_torch import FraudMLP, load_processed_data, evaluate_model, DEVICE
 
 
 # ---------------------------------------------------
@@ -32,20 +28,32 @@ PGD_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "pgd_results.json"
 TRANSFER_FGSM_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "transfer_fgsm_results.json"
 TRANSFER_PGD_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "transfer_pgd_results.json"
 ZOO_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "zoo_results.json"
+ZOO_SAMPLE_RESULTS_PATH = PROJECT_ROOT / "results" / "attacks" / "zoo_sample_results.csv"
 
 NOISE_DEFENCE_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "noise_defence_on_attacks.json"
 
 DISAGREEMENT_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_attacks_with_lr.json"
 DISAGREEMENT_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_attacks_without_lr.json"
-
 DISAGREEMENT_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_with_lr.csv"
 DISAGREEMENT_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_without_lr.csv"
 
 COMBINED_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_attacks_with_lr.json"
 COMBINED_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_attacks_without_lr.json"
-
 COMBINED_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_with_lr.csv"
 COMBINED_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_without_lr.csv"
+
+NOISE_ZOO_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "noise_defence_on_zoo_attacks.json"
+NOISE_ZOO_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "noise_defence_details_zoo.csv"
+
+DISAGREEMENT_ZOO_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_zoo_attacks_with_lr.json"
+DISAGREEMENT_ZOO_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_on_zoo_attacks_without_lr.json"
+DISAGREEMENT_ZOO_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_zoo_with_lr.csv"
+DISAGREEMENT_ZOO_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "disagreement_defence_details_zoo_without_lr.csv"
+
+COMBINED_ZOO_WITH_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_zoo_attacks_with_lr.json"
+COMBINED_ZOO_WITHOUT_LR_RESULTS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_on_zoo_attacks_without_lr.json"
+COMBINED_ZOO_WITH_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_zoo_with_lr.csv"
+COMBINED_ZOO_WITHOUT_LR_DETAILS_PATH = PROJECT_ROOT / "results" / "defences" / "on_attacks" / "combined_defence_details_zoo_without_lr.csv"
 
 THRESHOLD = 0.9
 
@@ -86,10 +94,10 @@ def get_clean_mlp_stats():
 
 @st.cache_data
 def get_total_test_samples():
-    _, _, X_test, _, = None, None, None, None  # placeholder to keep style simple
-    X_train, X_test, y_train, y_test = load_processed_data(
+    _, X_test, _, y_test = load_processed_data(
         processed_dir=str(PROJECT_ROOT / "data" / "processed")
     )
+    _ = y_test
     return len(X_test)
 
 
@@ -103,24 +111,6 @@ def load_attack_results(path: str):
         results = json.load(f)
 
     return pd.DataFrame(results)
-
-
-@st.cache_data
-def load_zoo_results(path: str):
-    file_path = Path(path)
-    if not file_path.exists():
-        return None, None
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        results = json.load(f)
-
-    summary = results.get("summary", {})
-    sample_results = results.get("sample_results", [])
-
-    summary_df = pd.DataFrame([summary]) if summary else None
-    sample_df = pd.DataFrame(sample_results) if sample_results else None
-
-    return summary_df, sample_df
 
 
 def normalize_attack_labels(df):
@@ -165,11 +155,32 @@ def load_csv_data(path: str):
     return df
 
 
+@st.cache_data
+def load_zoo_summary_results(path: str):
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        results = json.load(f)
+
+    if isinstance(results, dict):
+        summary = results.get("summary", {})
+        if summary:
+            return pd.DataFrame([summary])
+        return None
+
+    if isinstance(results, list):
+        return pd.DataFrame(results)
+
+    return None
+
+
 def plot_line(df, x_col, y_col, title, y_label):
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(df[x_col], df[y_col], marker="o")
     ax.set_title(title, fontsize=11)
-    ax.set_xlabel("epsilon", fontsize=9)
+    ax.set_xlabel(x_col, fontsize=9)
     ax.set_ylabel(y_label, fontsize=9)
     ax.tick_params(axis="both", labelsize=9)
     ax.grid(True, alpha=0.3)
@@ -296,6 +307,16 @@ def filter_by_attack_and_epsilon(df, selected_attack, selected_epsilon):
 def format_delta(clean_value, adv_value):
     delta = adv_value - clean_value
     return f"{adv_value:.4f}", f"{delta:.4f}"
+
+
+def get_step3_attack_options(df):
+    if df is None or df.empty or "attack_name" not in df.columns:
+        return []
+
+    allowed_attacks = ["FGSM", "PGD"]
+    available_attacks = df["attack_name"].dropna().unique().tolist()
+
+    return [attack for attack in allowed_attacks if attack in available_attacks]
 
 
 # ---------------------------------------------------
@@ -578,176 +599,160 @@ can generalize unevenly across different fraud classifier families.
 # ---------------------------------------------------
 # ZOO section renderer
 # ---------------------------------------------------
-def render_zoo_section(summary_df, sample_df, clean_metrics):
+def render_zoo_section(summary_df, sample_df):
     if summary_df is None or summary_df.empty:
         st.warning("ZOO results file not found. Run the zoo_attack.py script first.")
         return
 
     st.success("ZOO results loaded successfully.")
 
-    row = summary_df.iloc[0]
+    model_options = sorted(summary_df["target_model"].dropna().unique().tolist())
+    selected_model = st.selectbox(
+        "Select target model for ZOO",
+        model_options,
+        key="zoo_target_model_select"
+    )
+
+    selected_row = summary_df[summary_df["target_model"] == selected_model].iloc[0]
 
     st.subheader("Key Black-Box Finding")
 
     c1, c2, c3, c4 = st.columns(4)
-
-    recall_value, recall_delta = format_delta(clean_metrics["recall"], row["adv_recall"])
-    f1_value, f1_delta = format_delta(clean_metrics["f1"], row["adv_f1"])
-    prauc_value, prauc_delta = format_delta(clean_metrics["pr_auc"], row["adv_pr_auc"])
-
-    c1.metric("Recall", recall_value, recall_delta)
-    c2.metric("F1", f1_value, f1_delta)
-    c3.metric("PR-AUC", prauc_value, prauc_delta)
-    c4.metric("ASR", f"{row['asr']:.4f}")
+    c1.metric("Target Model", selected_row["target_model"])
+    c2.metric("Successful Attacks", int(selected_row["successful_attacks"]))
+    c3.metric("Attack Attempts", int(selected_row["attack_attempts"]))
+    c4.metric("ASR", f"{selected_row['asr']:.4f}")
 
     st.info(
-        f"Precomputed ZOO black-box results for the PyTorch MLP. "
-        f"This run used max_iters = {int(row['max_iters'])}, "
-        f"learning_rate = {row['learning_rate']}, "
-        f"coords_per_iter = {int(row['coords_per_iter'])}, "
-        f"and attacked {int(row['attacked_fraud_samples'])} fraud samples."
+        f"ZOO is a target-model-specific black-box attack. For {selected_model}, "
+        f"this run attacked {int(selected_row['attacked_fraud_samples'])} fraud samples with "
+        f"max_iters = {int(selected_row['max_iters'])}, learning_rate = {selected_row['learning_rate']}, "
+        f"and coords_per_iter = {int(selected_row['coords_per_iter'])}."
     )
 
-    st.subheader("ZOO Summary")
+    st.subheader("Selected Model Summary")
+
     summary_view = pd.DataFrame([{
-        "Successful Attacks": int(row["successful_attacks"]),
-        "Attack Attempts": int(row["attack_attempts"]),
-        "Avg Queries / Sample": round(float(row["avg_queries_per_sample"]), 2),
-        "Avg L2 Dist": round(float(row["avg_l2_dist"]), 4),
-        "Avg Linf Dist": round(float(row["avg_linf_dist"]), 4),
-        "Adv TP": int(row["adv_tp"]),
-        "Adv FN": int(row["adv_fn"]),
-        "Adv Precision": round(float(row["adv_precision"]), 4),
+        "Target Model": selected_row["target_model"],
+        "Successful Attacks": int(selected_row["successful_attacks"]),
+        "Attack Attempts": int(selected_row["attack_attempts"]),
+        "ASR": round(float(selected_row["asr"]), 4),
+        "Avg Queries / Sample": round(float(selected_row["avg_queries_per_sample"]), 2),
+        "Avg L2 Dist": round(float(selected_row["avg_l2_dist"]), 4),
+        "Avg Linf Dist": round(float(selected_row["avg_linf_dist"]), 4),
+        "Adv Recall": round(float(selected_row["adv_recall"]), 4),
+        "Adv F1": round(float(selected_row["adv_f1"]), 4),
+        "Adv PR-AUC": round(float(selected_row["adv_pr_auc"]), 4),
     }])
     st.dataframe(summary_view, use_container_width=True, hide_index=True)
 
-    st.subheader("ZOO Comparison Charts")
+    st.subheader("ZOO Comparison Across Target Models")
+    compare_cols = [
+        "target_model",
+        "successful_attacks",
+        "attack_attempts",
+        "asr",
+        "avg_queries_per_sample",
+        "adv_recall",
+        "adv_f1",
+        "adv_pr_auc",
+    ]
+    st.dataframe(summary_df[compare_cols], use_container_width=True, height=280)
 
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
-        plot_grouped_bar(
-            categories=["Recall", "F1", "PR-AUC"],
-            clean_values=[
-                row["clean_recall"],
-                row["clean_f1"],
-                row["clean_pr_auc"],
-            ],
-            adv_values=[
-                row["adv_recall"],
-                row["adv_f1"],
-                row["adv_pr_auc"],
-            ],
-            title="ZOO: Clean vs Adversarial Metrics",
-            y_label="Score",
+        plot_bar(
+            summary_df,
+            "target_model",
+            "asr",
+            "ZOO: ASR by Target Model",
+            "ASR",
+        )
+        plot_bar(
+            summary_df,
+            "target_model",
+            "successful_attacks",
+            "ZOO: Successful Attacks by Target Model",
+            "Successful Attacks",
         )
 
     with chart_col2:
         plot_grouped_bar(
-            categories=["TP", "FN", "FP"],
+            categories=["Recall", "F1", "PR-AUC"],
             clean_values=[
-                row["clean_tp"],
-                row["clean_fn"],
-                row["clean_fp"],
+                selected_row["clean_recall"],
+                selected_row["clean_f1"],
+                selected_row["clean_pr_auc"],
             ],
             adv_values=[
-                row["adv_tp"],
-                row["adv_fn"],
-                row["adv_fp"],
+                selected_row["adv_recall"],
+                selected_row["adv_f1"],
+                selected_row["adv_pr_auc"],
             ],
-            title="ZOO: Changed Confusion Counts",
-            y_label="Count",
+            title=f"ZOO: Clean vs Adversarial Metrics ({selected_model})",
+            y_label="Score",
         )
-
-    st.subheader("ZOO Summary Table")
-    st.dataframe(summary_df, use_container_width=True)
 
     if sample_df is not None and not sample_df.empty:
         sample_df = sample_df.copy()
-        sample_df["prob_drop"] = sample_df["original_prob"] - sample_df["adv_prob"]
+        model_sample_df = sample_df[sample_df["target_model"] == selected_model].copy()
 
-        st.subheader("Successful ZOO Attacks")
-
-        success_df = sample_df[sample_df["success"] == True].copy()
-
-        if not success_df.empty:
-            success_df["original_prob"] = success_df["original_prob"].round(4)
-            success_df["adv_prob"] = success_df["adv_prob"].round(4)
-            success_df["l2_dist"] = success_df["l2_dist"].round(4)
-            success_df["linf_dist"] = success_df["linf_dist"].round(4)
-            success_df["prob_drop"] = (
-                success_df["original_prob"] - success_df["adv_prob"]
+        if not model_sample_df.empty:
+            model_sample_df["prob_drop"] = (
+                model_sample_df["original_prob"] - model_sample_df["adv_prob"]
             ).round(4)
 
+            st.subheader("Selected Model Sample Results")
+
+            success_df = model_sample_df[model_sample_df["success"] == True].copy()
+
+            if not success_df.empty:
+                show_cols = [
+                    "test_index",
+                    "success",
+                    "original_prob",
+                    "adv_prob",
+                    "prob_drop",
+                    "queries",
+                    "l2_dist",
+                    "linf_dist",
+                ]
+                st.dataframe(success_df[show_cols], use_container_width=True, height=220)
+            else:
+                st.info("No successful ZOO attack samples were recorded for this model.")
+
+            top_drop_df = model_sample_df.sort_values("prob_drop", ascending=False).head(10).copy()
             show_cols = [
                 "test_index",
+                "success",
                 "original_prob",
                 "adv_prob",
-                "original_pred",
-                "adv_pred",
+                "prob_drop",
                 "queries",
                 "l2_dist",
                 "linf_dist",
             ]
-            st.dataframe(success_df[show_cols], use_container_width=True, height=220)
-
-            plot_bar(
-                success_df.astype({"test_index": str}),
-                "test_index",
-                "prob_drop",
-                "ZOO: Probability Drop for Successful Attacks",
-                "Probability Drop",
-            )
-        else:
-            st.info("No successful ZOO attacks were found in the saved file.")
-
-        st.subheader("Top Probability Drops")
-
-        top_drop_df = sample_df.sort_values("prob_drop", ascending=False).head(10).copy()
-
-        top_drop_df["original_prob"] = top_drop_df["original_prob"].round(4)
-        top_drop_df["adv_prob"] = top_drop_df["adv_prob"].round(4)
-        top_drop_df["prob_drop"] = top_drop_df["prob_drop"].round(4)
-        top_drop_df["l2_dist"] = top_drop_df["l2_dist"].round(4)
-        top_drop_df["linf_dist"] = top_drop_df["linf_dist"].round(4)
-
-        show_cols = [
-            "test_index",
-            "success",
-            "original_prob",
-            "adv_prob",
-            "prob_drop",
-            "queries",
-            "l2_dist",
-            "linf_dist",
-        ]
-        st.dataframe(top_drop_df[show_cols], use_container_width=True, height=300)
-
-        plot_bar(
-            top_drop_df.astype({"test_index": str}),
-            "test_index",
-            "prob_drop",
-            "ZOO: Top Probability Drops",
-            "Probability Drop",
-        )
+            st.subheader("Top Probability Drops")
+            st.dataframe(top_drop_df[show_cols], use_container_width=True, height=260)
 
     st.subheader("Research Interpretation")
     st.markdown(
         f"""
 **Observation:**  
-The ZOO black-box attack is weaker than the white-box attacks, but it still causes measurable degradation.
+ZOO is now evaluated as a target-model-specific black-box attack. This means each model has its own
+attacked dataset, own successful attack count, and own query cost.
 
-**Saved ZOO result:**
-- Adversarial Recall: **{row['adv_recall']:.4f}**
-- Adversarial F1: **{row['adv_f1']:.4f}**
-- Adversarial PR-AUC: **{row['adv_pr_auc']:.4f}**
-- Successful Attacks: **{int(row['successful_attacks'])}**
-- Attack Success Rate (ASR): **{row['asr']:.4f}**
-- Average Queries per Sample: **{row['avg_queries_per_sample']:.2f}**
+**Selected target model:**
+- Target Model: **{selected_row['target_model']}**
+- Successful Attacks: **{int(selected_row['successful_attacks'])}**
+- Attack Attempts: **{int(selected_row['attack_attempts'])}**
+- ASR: **{selected_row['asr']:.4f}**
+- Avg Queries per Sample: **{selected_row['avg_queries_per_sample']:.2f}**
 
 **Conclusion:**  
-The PyTorch MLP shows limited but meaningful black-box vulnerability.  
-Compared with white-box attacks, ZOO requires many more queries and larger perturbations to achieve evasion.
+Under this query-based black-box setting, robustness is model-dependent. Some model families are harder
+to fool than others under the same ZOO configuration.
 """
     )
 
@@ -762,7 +767,11 @@ def render_defence_section(df, defence_label):
 
     st.success(f"{defence_label} results loaded successfully.")
 
-    attack_options = sorted(df["attack_name"].dropna().unique().tolist())
+    attack_options = get_step3_attack_options(df)
+    if not attack_options:
+        st.warning("No FGSM or PGD defence results found for Step 3.")
+        return
+
     selected_attack = st.selectbox(
         f"Select attack type for {defence_label}",
         attack_options,
@@ -888,6 +897,129 @@ binary classifier.
 
 
 # ---------------------------------------------------
+# ZOO noise section renderer
+# ---------------------------------------------------
+def render_zoo_noise_section(zoo_df, zoo_details):
+    if zoo_df is None or zoo_df.empty:
+        st.warning("ZOO noise-defence results file not found.")
+        return
+
+    st.success("ZOO noise-defence results loaded successfully.")
+
+    st.info(
+        "ZOO is a target-model-specific black-box attack. Therefore, ZOO defence evaluation is shown "
+        "per target model rather than per epsilon."
+    )
+
+    model_options = sorted(zoo_df["target_model"].dropna().unique().tolist())
+    selected_model = st.selectbox(
+        "Select target model for ZOO noise defence",
+        model_options,
+        key="zoo_noise_target_model_select"
+    )
+
+    row = zoo_df[zoo_df["target_model"] == selected_model].iloc[0]
+    total_samples = get_total_test_samples()
+    review_count = int(round(float(row["review_rate"]) * total_samples))
+
+    st.subheader("ZOO Noise Stability Key Result")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Target Model", row["target_model"])
+    c2.metric("Successful Attacks Before", int(row["successful_attacks_before_defence"]))
+    c3.metric("Caught by Defence", int(row["successful_attacks_caught_by_defence"]))
+    c4.metric("Catch Rate", f"{row['defence_catch_rate']:.2%}")
+    c5.metric("Review Rate", f"{row['review_rate']:.2%}")
+
+    st.info(
+        f"For ZOO against {row['target_model']}, the noise stability defence caught "
+        f"{int(row['successful_attacks_caught_by_defence'])} out of "
+        f"{int(row['successful_attacks_before_defence'])} successful attacks while reviewing "
+        f"{review_count} transactions."
+    )
+
+    show_cols = [
+        "attack_name",
+        "target_model",
+        "successful_attacks_before_defence",
+        "successful_attacks_caught_by_defence",
+        "defence_catch_rate",
+        "review_rate",
+        "adv_precision_before",
+        "adv_recall_before",
+        "adv_f1_before",
+        "adv_pr_auc_before",
+        "defended_precision_after",
+        "defended_recall_after",
+        "defended_f1_after",
+        "defended_pr_auc_after",
+    ]
+    st.dataframe(pd.DataFrame([row])[show_cols], use_container_width=True, hide_index=True)
+
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        plot_defence_catch_chart(row, f"ZOO Noise Defence: {selected_model}")
+    with chart_col2:
+        plot_defence_review_chart(row, f"ZOO Noise Defence Rates: {selected_model}")
+
+    if zoo_details is not None and not zoo_details.empty:
+        detail_df = zoo_details[zoo_details["target_model"] == selected_model].copy()
+
+        sample_view_choice = st.radio(
+            "Select ZOO noise sample view",
+            ["Caught attack samples", "All flagged review samples"],
+            horizontal=True,
+            key="zoo_noise_sample_view_choice"
+        )
+
+        if sample_view_choice == "Caught attack samples":
+            detail_df = detail_df[detail_df["caught_by_defence"] == 1].copy()
+        else:
+            detail_df = detail_df[detail_df["noise_gate_triggered"] == 1].copy()
+
+        if not detail_df.empty:
+            show_cols = [
+                "sample_index",
+                "true_label",
+                "clean_pred",
+                "adv_pred",
+                "adv_prob",
+                "was_attacked",
+                "successful_attack_before_defence",
+                "noise_gate_triggered",
+                "caught_by_defence",
+                "flip_rate",
+                "perturbed_prob_std",
+                "perturbed_prob_mean",
+                "perturbed_prob_min",
+                "perturbed_prob_max",
+            ]
+            available_cols = [c for c in show_cols if c in detail_df.columns]
+            st.subheader("Exact Sample View")
+            st.dataframe(detail_df[available_cols], use_container_width=True, height=300)
+
+    st.subheader("Research Interpretation")
+    st.markdown(
+        f"""
+**Observation:**  
+This section measures whether the noise-stability gate can intercept successful ZOO black-box evasion cases
+for the selected target model.
+
+**Selected target model:**
+- Target Model: **{row['target_model']}**
+- Successful Attacks Before Defence: **{int(row['successful_attacks_before_defence'])}**
+- Successful Attacks Caught by Defence: **{int(row['successful_attacks_caught_by_defence'])}**
+- Defence Catch Rate: **{row['defence_catch_rate']:.2%}**
+- Review Rate: **{row['review_rate']:.2%}**
+
+**Conclusion:**  
+This result shows whether the noise-stability gate adds practical black-box protection for the selected
+ZOO target model under a low or high review burden.
+"""
+    )
+
+
+# ---------------------------------------------------
 # Disagreement comparison renderer
 # ---------------------------------------------------
 def render_disagreement_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
@@ -901,7 +1033,11 @@ def render_disagreement_comparison_section(with_lr_df, without_lr_df, with_lr_de
 
     st.success("Both disagreement comparison files loaded successfully.")
 
-    attack_options = sorted(with_lr_df["attack_name"].dropna().unique().tolist())
+    attack_options = get_step3_attack_options(with_lr_df)
+    if not attack_options:
+        st.warning("No FGSM or PGD disagreement-defence results found for Step 3.")
+        return
+
     selected_attack = st.selectbox(
         "Select attack type for disagreement comparison",
         attack_options,
@@ -1063,6 +1199,166 @@ def render_disagreement_comparison_section(with_lr_df, without_lr_df, with_lr_de
 
 
 # ---------------------------------------------------
+# ZOO disagreement comparison renderer
+# ---------------------------------------------------
+def render_zoo_disagreement_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
+    if with_lr_df is None or with_lr_df.empty:
+        st.warning("ZOO disagreement with-LR results file not found.")
+        return
+
+    if without_lr_df is None or without_lr_df.empty:
+        st.warning("ZOO disagreement without-LR results file not found.")
+        return
+
+    st.success("Both ZOO disagreement comparison files loaded successfully.")
+
+    st.info(
+        "ZOO is a target-model-specific black-box attack. Therefore, ZOO disagreement-defence comparison is shown "
+        "per target model rather than per epsilon."
+    )
+
+    model_options = sorted(with_lr_df["target_model"].dropna().unique().tolist())
+    selected_model = st.selectbox(
+        "Select target model for ZOO disagreement comparison",
+        model_options,
+        key="zoo_disagreement_target_model_select"
+    )
+
+    with_lr_row = with_lr_df[with_lr_df["target_model"] == selected_model].iloc[0]
+    without_lr_row = without_lr_df[without_lr_df["target_model"] == selected_model].iloc[0]
+
+    with_lr_review_count = int(round(float(with_lr_row["review_rate"]) * total_samples))
+    without_lr_review_count = int(round(float(without_lr_row["review_rate"]) * total_samples))
+
+    st.subheader("ZOO Disagreement Defence Comparison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### With LR")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Caught", f"{int(with_lr_row['successful_attacks_caught_by_defence'])} / {int(with_lr_row['successful_attacks_before_defence'])}")
+        a2.metric("Catch Rate", f"{with_lr_row['defence_catch_rate']:.2%}")
+        a3.metric("Review Rate", f"{with_lr_row['review_rate']:.2%}")
+
+        b1, b2 = st.columns(2)
+        b1.metric("Manual Review Count", with_lr_review_count)
+        b2.metric("Recall After", f"{with_lr_row['defended_recall_after']:.4f}")
+
+    with col2:
+        st.markdown("### Without LR")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Caught", f"{int(without_lr_row['successful_attacks_caught_by_defence'])} / {int(without_lr_row['successful_attacks_before_defence'])}")
+        c2.metric("Catch Rate", f"{without_lr_row['defence_catch_rate']:.2%}")
+        c3.metric("Review Rate", f"{without_lr_row['review_rate']:.2%}")
+
+        d1, d2 = st.columns(2)
+        d1.metric("Manual Review Count", without_lr_review_count)
+        d2.metric("Recall After", f"{without_lr_row['defended_recall_after']:.4f}")
+
+    st.info(
+        f"For ZOO against {selected_model}, disagreement with LR caught "
+        f"{int(with_lr_row['successful_attacks_caught_by_defence'])} of "
+        f"{int(with_lr_row['successful_attacks_before_defence'])} successful attacks with about "
+        f"{with_lr_review_count} reviews, while disagreement without LR caught "
+        f"{int(without_lr_row['successful_attacks_caught_by_defence'])} with about "
+        f"{without_lr_review_count} reviews."
+    )
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        plot_variant_rate_chart(with_lr_row, without_lr_row, f"ZOO Disagreement Defence: {selected_model}")
+
+    with chart_col2:
+        compare_plot_df = pd.DataFrame({
+            "Variant": ["With LR", "Without LR"],
+            "Manual Review Count": [with_lr_review_count, without_lr_review_count],
+        })
+        plot_bar(compare_plot_df, "Variant", "Manual Review Count", "Manual Review Count Comparison", "Count")
+
+    compare_df = pd.DataFrame([
+        {
+            "Variant": "With LR",
+            "Attack": with_lr_row["attack_name"],
+            "Target Model": with_lr_row["target_model"],
+            "Successful Attacks Before": int(with_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(with_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(with_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(with_lr_row["review_rate"]), 4),
+            "Manual Review Count": with_lr_review_count,
+            "Recall After": round(float(with_lr_row["defended_recall_after"]), 4),
+        },
+        {
+            "Variant": "Without LR",
+            "Attack": without_lr_row["attack_name"],
+            "Target Model": without_lr_row["target_model"],
+            "Successful Attacks Before": int(without_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(without_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(without_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(without_lr_row["review_rate"]), 4),
+            "Manual Review Count": without_lr_review_count,
+            "Recall After": round(float(without_lr_row["defended_recall_after"]), 4),
+        },
+    ])
+
+    st.subheader("Comparison Table")
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    st.subheader("Exact Sample View")
+
+    sample_view_choice = st.radio(
+        "Select ZOO disagreement sample view",
+        ["Caught attack samples", "All flagged review samples"],
+        horizontal=True,
+        key="zoo_disagreement_sample_view_choice"
+    )
+
+    detail_variant = st.selectbox(
+        "Select ZOO detail variant",
+        ["With LR", "Without LR"],
+        key="zoo_disagreement_detail_variant_select"
+    )
+
+    detail_df = with_lr_details if detail_variant == "With LR" else without_lr_details
+
+    if detail_df is None or detail_df.empty:
+        st.info("Detailed ZOO sample file not found for this variant.")
+        return
+
+    detail_df = detail_df[detail_df["target_model"] == selected_model].copy()
+
+    if sample_view_choice == "Caught attack samples":
+        detail_df = detail_df[detail_df["caught_by_defence"] == 1].copy()
+    else:
+        detail_df = detail_df[detail_df["disagreement_gate_triggered"] == 1].copy()
+
+    if detail_df.empty:
+        st.info("No matching ZOO sample rows found for the selected filters.")
+        return
+
+    show_cols = [
+        "sample_index",
+        "true_label",
+        "clean_pred",
+        "adv_pred",
+        "adv_prob",
+        "was_attacked",
+        "successful_attack_before_defence",
+        "disagreement_gate_triggered",
+        "caught_by_defence",
+        "fraud_votes",
+        "nonfraud_votes",
+        "ensemble_prob_std",
+        "ensemble_prob_range",
+        "majority_margin",
+    ]
+
+    available_cols = [c for c in show_cols if c in detail_df.columns]
+    st.dataframe(detail_df[available_cols], use_container_width=True, height=300)
+
+
+# ---------------------------------------------------
 # Combined comparison renderer
 # ---------------------------------------------------
 def render_combined_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
@@ -1076,7 +1372,11 @@ def render_combined_comparison_section(with_lr_df, without_lr_df, with_lr_detail
 
     st.success("Both combined comparison files loaded successfully.")
 
-    attack_options = sorted(with_lr_df["attack_name"].dropna().unique().tolist())
+    attack_options = get_step3_attack_options(with_lr_df)
+    if not attack_options:
+        st.warning("No FGSM or PGD combined-defence results found for Step 3.")
+        return
+
     selected_attack = st.selectbox(
         "Select attack type for combined comparison",
         attack_options,
@@ -1233,6 +1533,170 @@ def render_combined_comparison_section(with_lr_df, without_lr_df, with_lr_detail
 
 
 # ---------------------------------------------------
+# ZOO combined comparison renderer
+# ---------------------------------------------------
+def render_zoo_combined_comparison_section(with_lr_df, without_lr_df, with_lr_details, without_lr_details, total_samples):
+    if with_lr_df is None or with_lr_df.empty:
+        st.warning("ZOO combined with-LR results file not found.")
+        return
+
+    if without_lr_df is None or without_lr_df.empty:
+        st.warning("ZOO combined without-LR results file not found.")
+        return
+
+    st.success("Both ZOO combined comparison files loaded successfully.")
+
+    st.info(
+        "ZOO is a target-model-specific black-box attack. Therefore, ZOO combined-defence comparison is shown "
+        "per target model rather than per epsilon."
+    )
+
+    model_options = sorted(with_lr_df["target_model"].dropna().unique().tolist())
+    selected_model = st.selectbox(
+        "Select target model for ZOO combined comparison",
+        model_options,
+        key="zoo_combined_target_model_select"
+    )
+
+    with_lr_row = with_lr_df[with_lr_df["target_model"] == selected_model].iloc[0]
+    without_lr_row = without_lr_df[without_lr_df["target_model"] == selected_model].iloc[0]
+
+    with_lr_review_count = int(round(float(with_lr_row["review_rate"]) * total_samples))
+    without_lr_review_count = int(round(float(without_lr_row["review_rate"]) * total_samples))
+
+    st.subheader("ZOO Combined Defence Comparison")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### With LR")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Caught", f"{int(with_lr_row['successful_attacks_caught_by_defence'])} / {int(with_lr_row['successful_attacks_before_defence'])}")
+        a2.metric("Catch Rate", f"{with_lr_row['defence_catch_rate']:.2%}")
+        a3.metric("Review Rate", f"{with_lr_row['review_rate']:.2%}")
+
+        b1, b2 = st.columns(2)
+        b1.metric("Manual Review Count", with_lr_review_count)
+        b2.metric("Recall After", f"{with_lr_row['defended_recall_after']:.4f}")
+
+    with col2:
+        st.markdown("### Without LR")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Caught", f"{int(without_lr_row['successful_attacks_caught_by_defence'])} / {int(without_lr_row['successful_attacks_before_defence'])}")
+        c2.metric("Catch Rate", f"{without_lr_row['defence_catch_rate']:.2%}")
+        c3.metric("Review Rate", f"{without_lr_row['review_rate']:.2%}")
+
+        d1, d2 = st.columns(2)
+        d1.metric("Manual Review Count", without_lr_review_count)
+        d2.metric("Recall After", f"{without_lr_row['defended_recall_after']:.4f}")
+
+    st.info(
+        f"For ZOO against {selected_model}, combined with LR caught "
+        f"{int(with_lr_row['successful_attacks_caught_by_defence'])} of "
+        f"{int(with_lr_row['successful_attacks_before_defence'])} successful attacks with about "
+        f"{with_lr_review_count} reviews, while combined without LR caught "
+        f"{int(without_lr_row['successful_attacks_caught_by_defence'])} with about "
+        f"{without_lr_review_count} reviews."
+    )
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        plot_variant_rate_chart(with_lr_row, without_lr_row, f"ZOO Combined Defence: {selected_model}")
+
+    with chart_col2:
+        compare_plot_df = pd.DataFrame({
+            "Variant": ["With LR", "Without LR"],
+            "Manual Review Count": [with_lr_review_count, without_lr_review_count],
+        })
+        plot_bar(compare_plot_df, "Variant", "Manual Review Count", "Manual Review Count Comparison", "Count")
+
+    compare_df = pd.DataFrame([
+        {
+            "Variant": "With LR",
+            "Attack": with_lr_row["attack_name"],
+            "Target Model": with_lr_row["target_model"],
+            "Successful Attacks Before": int(with_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(with_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(with_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(with_lr_row["review_rate"]), 4),
+            "Manual Review Count": with_lr_review_count,
+            "Recall After": round(float(with_lr_row["defended_recall_after"]), 4),
+        },
+        {
+            "Variant": "Without LR",
+            "Attack": without_lr_row["attack_name"],
+            "Target Model": without_lr_row["target_model"],
+            "Successful Attacks Before": int(without_lr_row["successful_attacks_before_defence"]),
+            "Caught by Defence": int(without_lr_row["successful_attacks_caught_by_defence"]),
+            "Catch Rate": round(float(without_lr_row["defence_catch_rate"]), 4),
+            "Review Rate": round(float(without_lr_row["review_rate"]), 4),
+            "Manual Review Count": without_lr_review_count,
+            "Recall After": round(float(without_lr_row["defended_recall_after"]), 4),
+        },
+    ])
+
+    st.subheader("Comparison Table")
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    st.subheader("Exact Sample View")
+
+    sample_view_choice = st.radio(
+        "Select ZOO combined sample view",
+        ["Caught attack samples", "All flagged review samples"],
+        horizontal=True,
+        key="zoo_combined_sample_view_choice"
+    )
+
+    detail_variant = st.selectbox(
+        "Select ZOO combined detail variant",
+        ["With LR", "Without LR"],
+        key="zoo_combined_detail_variant_select"
+    )
+
+    detail_df = with_lr_details if detail_variant == "With LR" else without_lr_details
+
+    if detail_df is None or detail_df.empty:
+        st.info("Detailed ZOO sample file not found for this variant.")
+        return
+
+    detail_df = detail_df[detail_df["target_model"] == selected_model].copy()
+
+    if sample_view_choice == "Caught attack samples":
+        detail_df = detail_df[detail_df["caught_by_defence"] == 1].copy()
+    else:
+        detail_df = detail_df[detail_df["review_flag"] == 1].copy()
+
+    if detail_df.empty:
+        st.info("No matching ZOO sample rows found for the selected filters.")
+        return
+
+    show_cols = [
+        "sample_index",
+        "true_label",
+        "clean_pred",
+        "adv_pred",
+        "adv_prob",
+        "was_attacked",
+        "successful_attack_before_defence",
+        "noise_gate_triggered",
+        "disagreement_gate_triggered",
+        "review_flag",
+        "caught_by_defence",
+        "fraud_votes",
+        "nonfraud_votes",
+        "ensemble_prob_std",
+        "ensemble_prob_range",
+        "majority_margin",
+        "noise_flip_rate",
+        "noise_prob_std",
+    ]
+
+    available_cols = [c for c in show_cols if c in detail_df.columns]
+    st.dataframe(detail_df[available_cols], use_container_width=True, height=300)
+
+
+# ---------------------------------------------------
 # Sidebar
 # ---------------------------------------------------
 st.sidebar.title("Controls")
@@ -1261,7 +1725,8 @@ st.caption(
 # ---------------------------------------------------
 # Step 1: Clean model
 # ---------------------------------------------------
-st.header("Step 1 — Clean Model Performance")
+st.header("Step 1 — Baseline Multi-Layer Perceptron (MLP) Performance")
+st.caption("Clean test-set performance of the tuned PyTorch MLP fraud detection model.")
 
 try:
     clean_metrics = get_clean_mlp_stats()
@@ -1365,7 +1830,7 @@ with tab_transfer_pgd:
 with tab_zoo:
     st.subheader("ZOO Black-Box Attack Analysis")
     st.write(
-        "This section shows precomputed ZOO black-box attack results for the PyTorch MLP. "
+        "This section shows target-model-specific ZOO black-box attack results. "
         "ZOO is displayed offline because query-based black-box attacks are computationally expensive."
     )
 
@@ -1376,8 +1841,9 @@ with tab_zoo:
         st.session_state.show_zoo = True
 
     if st.session_state.show_zoo:
-        zoo_summary_df, zoo_sample_df = load_zoo_results(str(ZOO_RESULTS_PATH))
-        render_zoo_section(zoo_summary_df, zoo_sample_df, clean_metrics)
+        zoo_summary_df = load_zoo_summary_results(str(ZOO_RESULTS_PATH))
+        zoo_sample_df = load_csv_data(str(ZOO_SAMPLE_RESULTS_PATH))
+        render_zoo_section(zoo_summary_df, zoo_sample_df)
     else:
         st.info("Click 'Show ZOO Results' to review black-box robustness results.")
 
@@ -1398,6 +1864,13 @@ with tab_noise:
         "adversarial evasions and route them to manual review."
     )
 
+    defence_mode = st.radio(
+        "Select evaluation mode",
+        ["White-box Attacks", "ZOO Black-box"],
+        horizontal=True,
+        key="noise_defence_mode_radio"
+    )
+
     if "show_noise_defence" not in st.session_state:
         st.session_state.show_noise_defence = False
 
@@ -1405,8 +1878,13 @@ with tab_noise:
         st.session_state.show_noise_defence = True
 
     if st.session_state.show_noise_defence:
-        noise_df = load_defence_results(str(NOISE_DEFENCE_RESULTS_PATH))
-        render_defence_section(noise_df, "Noise Stability")
+        if defence_mode == "White-box Attacks":
+            noise_df = load_defence_results(str(NOISE_DEFENCE_RESULTS_PATH))
+            render_defence_section(noise_df, "Noise Stability")
+        else:
+            noise_zoo_df = load_defence_results(str(NOISE_ZOO_RESULTS_PATH))
+            noise_zoo_details = load_csv_data(str(NOISE_ZOO_DETAILS_PATH))
+            render_zoo_noise_section(noise_zoo_df, noise_zoo_details)
     else:
         st.info("Click 'Show Noise Stability Defence Results' to review defence effectiveness.")
 
@@ -1415,6 +1893,13 @@ with tab_disagreement:
     st.write(
         "This section compares disagreement defence with and without Logistic Regression in the ensemble, "
         "so the trade-off between stronger protection and lower review overhead can be demonstrated clearly."
+    )
+
+    defence_mode = st.radio(
+        "Select evaluation mode",
+        ["White-box Attacks", "ZOO Black-box"],
+        horizontal=True,
+        key="disagreement_defence_mode_radio"
     )
 
     if "show_disagreement_defence" not in st.session_state:
@@ -1426,19 +1911,34 @@ with tab_disagreement:
     if st.session_state.show_disagreement_defence:
         total_samples = get_total_test_samples()
 
-        disagreement_with_lr_df = load_defence_results(str(DISAGREEMENT_WITH_LR_RESULTS_PATH))
-        disagreement_without_lr_df = load_defence_results(str(DISAGREEMENT_WITHOUT_LR_RESULTS_PATH))
+        if defence_mode == "White-box Attacks":
+            disagreement_with_lr_df = load_defence_results(str(DISAGREEMENT_WITH_LR_RESULTS_PATH))
+            disagreement_without_lr_df = load_defence_results(str(DISAGREEMENT_WITHOUT_LR_RESULTS_PATH))
 
-        disagreement_with_lr_details = load_csv_data(str(DISAGREEMENT_WITH_LR_DETAILS_PATH))
-        disagreement_without_lr_details = load_csv_data(str(DISAGREEMENT_WITHOUT_LR_DETAILS_PATH))
+            disagreement_with_lr_details = load_csv_data(str(DISAGREEMENT_WITH_LR_DETAILS_PATH))
+            disagreement_without_lr_details = load_csv_data(str(DISAGREEMENT_WITHOUT_LR_DETAILS_PATH))
 
-        render_disagreement_comparison_section(
-            disagreement_with_lr_df,
-            disagreement_without_lr_df,
-            disagreement_with_lr_details,
-            disagreement_without_lr_details,
-            total_samples,
-        )
+            render_disagreement_comparison_section(
+                disagreement_with_lr_df,
+                disagreement_without_lr_df,
+                disagreement_with_lr_details,
+                disagreement_without_lr_details,
+                total_samples,
+            )
+        else:
+            disagreement_zoo_with_lr_df = load_defence_results(str(DISAGREEMENT_ZOO_WITH_LR_RESULTS_PATH))
+            disagreement_zoo_without_lr_df = load_defence_results(str(DISAGREEMENT_ZOO_WITHOUT_LR_RESULTS_PATH))
+
+            disagreement_zoo_with_lr_details = load_csv_data(str(DISAGREEMENT_ZOO_WITH_LR_DETAILS_PATH))
+            disagreement_zoo_without_lr_details = load_csv_data(str(DISAGREEMENT_ZOO_WITHOUT_LR_DETAILS_PATH))
+
+            render_zoo_disagreement_comparison_section(
+                disagreement_zoo_with_lr_df,
+                disagreement_zoo_without_lr_df,
+                disagreement_zoo_with_lr_details,
+                disagreement_zoo_without_lr_details,
+                total_samples,
+            )
     else:
         st.info("Click 'Show Ensemble Disagreement Results' to review defence effectiveness.")
 
@@ -1447,6 +1947,13 @@ with tab_combined:
     st.write(
         "This section compares combined defence with and without Logistic Regression in the ensemble. "
         "The final combined policy routes a transaction to manual review if either defence gate flags it."
+    )
+
+    defence_mode = st.radio(
+        "Select evaluation mode",
+        ["White-box Attacks", "ZOO Black-box"],
+        horizontal=True,
+        key="combined_defence_mode_radio"
     )
 
     if "show_combined_defence" not in st.session_state:
@@ -1458,18 +1965,33 @@ with tab_combined:
     if st.session_state.show_combined_defence:
         total_samples = get_total_test_samples()
 
-        combined_with_lr_df = load_defence_results(str(COMBINED_WITH_LR_RESULTS_PATH))
-        combined_without_lr_df = load_defence_results(str(COMBINED_WITHOUT_LR_RESULTS_PATH))
+        if defence_mode == "White-box Attacks":
+            combined_with_lr_df = load_defence_results(str(COMBINED_WITH_LR_RESULTS_PATH))
+            combined_without_lr_df = load_defence_results(str(COMBINED_WITHOUT_LR_RESULTS_PATH))
 
-        combined_with_lr_details = load_csv_data(str(COMBINED_WITH_LR_DETAILS_PATH))
-        combined_without_lr_details = load_csv_data(str(COMBINED_WITHOUT_LR_DETAILS_PATH))
+            combined_with_lr_details = load_csv_data(str(COMBINED_WITH_LR_DETAILS_PATH))
+            combined_without_lr_details = load_csv_data(str(COMBINED_WITHOUT_LR_DETAILS_PATH))
 
-        render_combined_comparison_section(
-            combined_with_lr_df,
-            combined_without_lr_df,
-            combined_with_lr_details,
-            combined_without_lr_details,
-            total_samples,
-        )
+            render_combined_comparison_section(
+                combined_with_lr_df,
+                combined_without_lr_df,
+                combined_with_lr_details,
+                combined_without_lr_details,
+                total_samples,
+            )
+        else:
+            combined_zoo_with_lr_df = load_defence_results(str(COMBINED_ZOO_WITH_LR_RESULTS_PATH))
+            combined_zoo_without_lr_df = load_defence_results(str(COMBINED_ZOO_WITHOUT_LR_RESULTS_PATH))
+
+            combined_zoo_with_lr_details = load_csv_data(str(COMBINED_ZOO_WITH_LR_DETAILS_PATH))
+            combined_zoo_without_lr_details = load_csv_data(str(COMBINED_ZOO_WITHOUT_LR_DETAILS_PATH))
+
+            render_zoo_combined_comparison_section(
+                combined_zoo_with_lr_df,
+                combined_zoo_without_lr_df,
+                combined_zoo_with_lr_details,
+                combined_zoo_without_lr_details,
+                total_samples,
+            )
     else:
         st.info("Click 'Show Combined Defence Results' to review defence effectiveness.")

@@ -1,8 +1,7 @@
-# src/attacks/zoo_attack.py
-
 import os
 import json
 import random
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -20,17 +19,19 @@ from sklearn.metrics import (
 RANDOM_STATE = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-THRESHOLD = 0.9
+THRESHOLD_MLP = 0.9
+THRESHOLD_SKLEARN = 0.5
+ATTACK_NAME = "ZOO"
 
-# Keep this small enough so ZOO runtime is manageable
-MAX_ATTACK_SAMPLES = 50 #100
+# Keep this manageable because ZOO is expensive
+MAX_ATTACK_SAMPLES = 50
 
 # ZOO settings
-MAX_ITERS = 120 #100 #80 #40
-LEARNING_RATE = 0.15 #0.1 #0.05
-FD_STEP = 0.001 #1e-3                 # finite difference step h
-LAMBDA_L2 =0.0 # 0.001              # small penalty to keep perturbation smaller
-COORDS_PER_ITER = 15 #12 # 8            # update only some features each iteration
+MAX_ITERS = 120
+LEARNING_RATE = 0.15
+FD_STEP = 0.001
+LAMBDA_L2 = 0.0
+COORDS_PER_ITER = 15
 
 
 def set_seed(seed=RANDOM_STATE):
@@ -42,8 +43,8 @@ def set_seed(seed=RANDOM_STATE):
 
 
 def load_processed_data(processed_dir="data/processed"):
-    X_train = pd.read_csv(os.path.join(processed_dir, "X_train.csv")).values.astype(np.float32)
-    X_test = pd.read_csv(os.path.join(processed_dir, "X_test.csv")).values.astype(np.float32)
+    X_train = pd.read_csv(os.path.join(processed_dir, "X_train.csv"))
+    X_test = pd.read_csv(os.path.join(processed_dir, "X_test.csv"))
     y_train = pd.read_csv(os.path.join(processed_dir, "y_train.csv")).squeeze("columns").values.astype(np.float32)
     y_test = pd.read_csv(os.path.join(processed_dir, "y_test.csv")).squeeze("columns").values.astype(np.float32)
 
@@ -67,13 +68,73 @@ class FraudMLP(nn.Module):
         return self.network(x)
 
 
-def evaluate_model(model, X_data, y_data, threshold=THRESHOLD):
+# ---------------------------------------------------
+# Model loading
+# ---------------------------------------------------
+def load_torch_mlp(input_dim):
+    model = FraudMLP(input_dim).to(DEVICE)
+    model.load_state_dict(torch.load("results/saved_models/mlp_torch.pth", map_location=DEVICE))
+    model.eval()
+    return model
+
+
+def load_all_target_models(input_dim):
+    models = {
+        "LogisticRegression": joblib.load("results/saved_models/LogisticRegression.pkl"),
+        "SVM": joblib.load("results/saved_models/SVM.pkl"),
+        "DecisionTree": joblib.load("results/saved_models/DecisionTree.pkl"),
+        "RandomForest": joblib.load("results/saved_models/RandomForest.pkl"),
+        "MLP_torch": load_torch_mlp(input_dim=input_dim),
+    }
+    return models
+
+
+def model_slug(model_name):
+    return model_name.lower().replace(" ", "_")
+
+
+def is_torch_model(model):
+    return isinstance(model, nn.Module)
+
+
+# ---------------------------------------------------
+# Prediction helpers
+# ---------------------------------------------------
+def get_sklearn_probability(model, X_data):
+    if hasattr(model, "predict_proba"):
+        return model.predict_proba(X_data)[:, 1].astype(np.float32)
+
+    if hasattr(model, "decision_function"):
+        scores = model.decision_function(X_data)
+        probs = 1.0 / (1.0 + np.exp(-scores))
+        return probs.astype(np.float32)
+
+    preds = model.predict(X_data)
+    return preds.astype(np.float32)
+
+
+def get_torch_probability(model, X_data_np):
     model.eval()
     with torch.no_grad():
-        X_tensor = torch.tensor(X_data, dtype=torch.float32).to(DEVICE)
+        X_tensor = torch.tensor(X_data_np, dtype=torch.float32).to(DEVICE)
         logits = model(X_tensor).squeeze(1)
-        probs = torch.sigmoid(logits).cpu().numpy()
-        preds = (probs >= threshold).astype(int)
+        probs = torch.sigmoid(logits).cpu().numpy().astype(np.float32)
+    return probs
+
+
+def get_model_probabilities(model, X_data, threshold_sklearn=THRESHOLD_SKLEARN, threshold_mlp=THRESHOLD_MLP):
+    if is_torch_model(model):
+        probs = get_torch_probability(model, X_data)
+        preds = (probs >= threshold_mlp).astype(int)
+        return probs, preds
+
+    probs = get_sklearn_probability(model, X_data)
+    preds = (probs >= threshold_sklearn).astype(int)
+    return probs, preds
+
+
+def evaluate_model_generic(model, X_data, y_data):
+    probs, preds = get_model_probabilities(model, X_data)
 
     cm = confusion_matrix(y_data, preds, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel()
@@ -90,34 +151,35 @@ def evaluate_model(model, X_data, y_data, threshold=THRESHOLD):
         "tp": int(tp),
     }
 
-    return metrics, probs, preds
+    return metrics, probs.astype(np.float32), preds.astype(int)
 
 
-def predict_prob(model, x_np):
-    model.eval()
-    with torch.no_grad():
-        x_tensor = torch.tensor(x_np.reshape(1, -1), dtype=torch.float32).to(DEVICE)
-        logit = model(x_tensor).squeeze(1)
-        prob = torch.sigmoid(logit).cpu().numpy()[0]
-    return float(prob)
+# ---------------------------------------------------
+# ZOO helpers
+# ---------------------------------------------------
+def predict_single_probability(model, x_np, feature_names=None):
+    if is_torch_model(model):
+        return float(get_torch_probability(model, x_np.reshape(1, -1))[0])
+
+    if feature_names is None:
+        raise ValueError("feature_names must be provided for sklearn model single-sample prediction")
+
+    x_df = pd.DataFrame([x_np], columns=feature_names)
+    return float(get_sklearn_probability(model, x_df)[0])
 
 
-def zoo_objective(model, x_adv, x_orig):
-    """
-    Objective to minimize:
-    fraud probability + small L2 distance penalty
+def get_single_prediction(prob, model):
+    threshold = THRESHOLD_MLP if is_torch_model(model) else THRESHOLD_SKLEARN
+    return int(prob >= threshold)
 
-    Since fraud class is label 1, attacker wants to reduce fraud probability.
-    """
-    fraud_prob = predict_prob(model, x_adv)
+
+def zoo_objective(model, x_adv, x_orig, feature_names=None):
+    fraud_prob = predict_single_probability(model, x_adv, feature_names=feature_names)
     l2_term = LAMBDA_L2 * np.sum((x_adv - x_orig) ** 2)
     return float(fraud_prob + l2_term)
 
 
-def estimate_gradient(model, x_adv, x_orig, coord_indices, x_min, x_max):
-    """
-    Central-difference gradient estimate on selected coordinates only.
-    """
+def estimate_gradient(model, x_adv, x_orig, coord_indices, x_min, x_max, feature_names=None):
     grad = np.zeros_like(x_adv, dtype=np.float32)
     query_count = 0
 
@@ -128,8 +190,8 @@ def estimate_gradient(model, x_adv, x_orig, coord_indices, x_min, x_max):
         x_plus[idx] = min(x_plus[idx] + FD_STEP, x_max[idx])
         x_minus[idx] = max(x_minus[idx] - FD_STEP, x_min[idx])
 
-        f_plus = zoo_objective(model, x_plus, x_orig)
-        f_minus = zoo_objective(model, x_minus, x_orig)
+        f_plus = zoo_objective(model, x_plus, x_orig, feature_names=feature_names)
+        f_minus = zoo_objective(model, x_minus, x_orig, feature_names=feature_names)
 
         grad[idx] = (f_plus - f_minus) / (2.0 * FD_STEP)
         query_count += 2
@@ -137,16 +199,12 @@ def estimate_gradient(model, x_adv, x_orig, coord_indices, x_min, x_max):
     return grad, query_count
 
 
-def zoo_attack_one(model, x, y_true, x_min, x_max):
-    """
-    Attack one sample using practical ZOO.
-    Only meaningful for fraud sample y=1 that is currently predicted as fraud.
-    """
+def zoo_attack_one(model, x, y_true, x_min, x_max, feature_names=None):
     x_orig = x.copy().astype(np.float32)
     x_adv = x.copy().astype(np.float32)
 
-    original_prob = predict_prob(model, x_orig)
-    original_pred = int(original_prob >= THRESHOLD)
+    original_prob = predict_single_probability(model, x_orig, feature_names=feature_names)
+    original_pred = get_single_prediction(original_prob, model)
 
     total_queries = 1
 
@@ -162,13 +220,12 @@ def zoo_attack_one(model, x, y_true, x_min, x_max):
         "x_adv": x_adv.copy(),
     }
 
-    # Only attack fraud samples correctly detected on clean input
     if int(y_true) != 1 or original_pred != 1:
         return result
 
     n_features = x_adv.shape[0]
     best_x_adv = x_adv.copy()
-    best_obj = zoo_objective(model, x_adv, x_orig)
+    best_obj = zoo_objective(model, x_adv, x_orig, feature_names=feature_names)
     total_queries += 1
 
     for _ in range(MAX_ITERS):
@@ -182,22 +239,22 @@ def zoo_attack_one(model, x, y_true, x_min, x_max):
             coord_indices=coord_indices,
             x_min=x_min,
             x_max=x_max,
+            feature_names=feature_names,
         )
         total_queries += used_queries
 
-        # Gradient descent on attacker objective
         x_adv = x_adv - LEARNING_RATE * grad
         x_adv = np.clip(x_adv, x_min, x_max)
 
-        current_obj = zoo_objective(model, x_adv, x_orig)
+        current_obj = zoo_objective(model, x_adv, x_orig, feature_names=feature_names)
         total_queries += 1
 
         if current_obj < best_obj:
             best_obj = current_obj
             best_x_adv = x_adv.copy()
 
-        adv_prob = predict_prob(model, x_adv)
-        adv_pred = int(adv_prob >= THRESHOLD)
+        adv_prob = predict_single_probability(model, x_adv, feature_names=feature_names)
+        adv_pred = get_single_prediction(adv_prob, model)
         total_queries += 1
 
         if adv_pred == 0:
@@ -212,8 +269,8 @@ def zoo_attack_one(model, x, y_true, x_min, x_max):
             })
             return result
 
-    final_prob = predict_prob(model, best_x_adv)
-    final_pred = int(final_prob >= THRESHOLD)
+    final_prob = predict_single_probability(model, best_x_adv, feature_names=feature_names)
+    final_pred = get_single_prediction(final_prob, model)
     total_queries += 1
 
     result.update({
@@ -229,21 +286,23 @@ def zoo_attack_one(model, x, y_true, x_min, x_max):
     return result
 
 
-def attack_fraud_samples_only(model, X_train, X_test, y_test, max_attack_samples=MAX_ATTACK_SAMPLES):
-    """
-    Attack only fraud samples in test set.
-    To keep runtime practical, attack only first N fraud samples.
-    """
+def attack_fraud_samples_only(
+    model,
+    X_train_np,
+    X_test_np,
+    y_test,
+    feature_names=None,
+    max_attack_samples=MAX_ATTACK_SAMPLES,
+):
     fraud_idx = np.where(y_test == 1)[0]
 
-    X_adv_full = X_test.copy()
+    X_adv_full = X_test_np.copy()
 
     if len(fraud_idx) == 0:
         return X_adv_full, fraud_idx, []
 
-    # Feature-wise bounds from training data only
-    x_min = X_train.min(axis=0).astype(np.float32)
-    x_max = X_train.max(axis=0).astype(np.float32)
+    x_min = X_train_np.min(axis=0).astype(np.float32)
+    x_max = X_train_np.max(axis=0).astype(np.float32)
 
     selected_idx = fraud_idx[:max_attack_samples]
     sample_results = []
@@ -253,13 +312,15 @@ def attack_fraud_samples_only(model, X_train, X_test, y_test, max_attack_samples
 
         res = zoo_attack_one(
             model=model,
-            x=X_test[idx],
+            x=X_test_np[idx],
             y_true=y_test[idx],
             x_min=x_min,
             x_max=x_max,
+            feature_names=feature_names,
         )
 
         X_adv_full[idx] = res["x_adv"]
+
         sample_results.append({
             "test_index": int(idx),
             "success": bool(res["success"]),
@@ -294,6 +355,9 @@ def compute_asr(clean_preds, adv_preds, y_true, attacked_idx):
     return asr, successes, attempts
 
 
+# ---------------------------------------------------
+# Main runner
+# ---------------------------------------------------
 def run_zoo_attack():
     set_seed()
 
@@ -301,114 +365,159 @@ def run_zoo_attack():
 
     X_train, X_test, y_train, y_test = load_processed_data()
 
-    print("X_test shape:", X_test.shape)
+    X_train_np = X_train.values.astype(np.float32)
+    X_test_np = X_test.values.astype(np.float32)
+    feature_names = X_test.columns.tolist()
+
+    print("X_test shape:", X_test_np.shape)
     print("Fraud count in y_test:", int(y_test.sum()))
 
     input_dim = X_train.shape[1]
+    target_models = load_all_target_models(input_dim=input_dim)
 
-    model = FraudMLP(input_dim).to(DEVICE)
-    model.load_state_dict(torch.load("results/saved_models/mlp_torch.pth", map_location=DEVICE))
-    model.eval()
-
-    print("\nLoaded model from results/saved_models/mlp_torch.pth")
-
-    clean_metrics, clean_probs, clean_preds = evaluate_model(model, X_test, y_test, threshold=THRESHOLD)
-
-    print("\nClean test performance:")
-    for k, v in clean_metrics.items():
-        if k in ["tn", "fp", "fn", "tp"]:
-            print(f"{k}: {int(v)}")
-        else:
-            print(f"{k}: {v:.4f}")
-
-    print("\nRunning ZOO black-box attack...")
-    print(f"Max attack samples: {MAX_ATTACK_SAMPLES}")
-    print(f"Max iterations per sample: {MAX_ITERS}")
-    print(f"Coords per iter: {COORDS_PER_ITER}")
-
-    X_test_adv, attacked_idx, sample_results = attack_fraud_samples_only(
-        model=model,
-        X_train=X_train,
-        X_test=X_test,
-        y_test=y_test,
-        max_attack_samples=MAX_ATTACK_SAMPLES,
-    )
-
-    adv_metrics, adv_probs, adv_preds = evaluate_model(model, X_test_adv, y_test, threshold=THRESHOLD)
-
-    asr, successes, attempts = compute_asr(clean_preds, adv_preds, y_test, attacked_idx)
-
-    avg_queries = float(np.mean([r["queries"] for r in sample_results])) if len(sample_results) > 0 else 0.0
-    avg_l2 = float(np.mean([r["l2_dist"] for r in sample_results])) if len(sample_results) > 0 else 0.0
-    avg_linf = float(np.mean([r["linf_dist"] for r in sample_results])) if len(sample_results) > 0 else 0.0
-
-    result = {
-        "attack_type": "ZOO_blackbox",
-        "target_model": "MLP_torch",
-        "max_attack_samples": int(len(attacked_idx)),
-        "max_iters": int(MAX_ITERS),
-        "learning_rate": float(LEARNING_RATE),
-        "fd_step": float(FD_STEP),
-        "lambda_l2": float(LAMBDA_L2),
-        "coords_per_iter": int(COORDS_PER_ITER),
-
-        "clean_accuracy": float(clean_metrics["accuracy"]),
-        "clean_precision": float(clean_metrics["precision"]),
-        "clean_recall": float(clean_metrics["recall"]),
-        "clean_f1": float(clean_metrics["f1"]),
-        "clean_pr_auc": float(clean_metrics["pr_auc"]),
-        "clean_tn": int(clean_metrics["tn"]),
-        "clean_fp": int(clean_metrics["fp"]),
-        "clean_fn": int(clean_metrics["fn"]),
-        "clean_tp": int(clean_metrics["tp"]),
-
-        "adv_accuracy": float(adv_metrics["accuracy"]),
-        "adv_precision": float(adv_metrics["precision"]),
-        "adv_recall": float(adv_metrics["recall"]),
-        "adv_f1": float(adv_metrics["f1"]),
-        "adv_pr_auc": float(adv_metrics["pr_auc"]),
-        "adv_tn": int(adv_metrics["tn"]),
-        "adv_fp": int(adv_metrics["fp"]),
-        "adv_fn": int(adv_metrics["fn"]),
-        "adv_tp": int(adv_metrics["tp"]),
-
-        "attacked_fraud_samples": int(len(attacked_idx)),
-        "successful_attacks": int(successes),
-        "attack_attempts": int(attempts),
-        "asr": float(asr),
-
-        "avg_queries_per_sample": float(avg_queries),
-        "avg_l2_dist": float(avg_l2),
-        "avg_linf_dist": float(avg_linf),
-    }
-
-    print(f"\nASR: {asr:.4f}")
-    print(f"Successful attacks: {successes}")
-    print(f"Attack attempts: {attempts}")
-    print(f"Average queries per sample: {avg_queries:.2f}")
-
-    print("\nAdversarial test performance:")
-    for k, v in adv_metrics.items():
-        if k in ["tn", "fp", "fn", "tp"]:
-            print(f"{k}: {int(v)}")
-        else:
-            print(f"{k}: {v:.4f}")
+    print("\nLoaded target models:")
+    for model_name in target_models.keys():
+        print(f" - {model_name}")
 
     os.makedirs("results/attacks", exist_ok=True)
+    os.makedirs("results/attacks/samples", exist_ok=True)
 
-    json_path = "results/attacks/zoo_results.json"
-    csv_path = "results/attacks/zoo_results.csv"
+    all_summaries = []
+    all_sample_rows = []
 
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "summary": result,
-            "sample_results": sample_results,
-        }, f, indent=4)
+    for target_model_name, target_model in target_models.items():
+        print(f"\n{'=' * 80}")
+        print(f"Running ZOO against target model: {target_model_name}")
+        print(f"{'=' * 80}")
+        print(f"Max attack samples: {MAX_ATTACK_SAMPLES}")
+        print(f"Max iterations per sample: {MAX_ITERS}")
+        print(f"Coords per iter: {COORDS_PER_ITER}")
 
-    pd.DataFrame(sample_results).to_csv(csv_path, index=False)
+        clean_metrics, clean_probs, clean_preds = evaluate_model_generic(
+            target_model,
+            X_test_np if is_torch_model(target_model) else X_test,
+            y_test,
+        )
 
-    print(f"\nSaved ZOO results to {json_path}")
-    print(f"Saved ZOO sample results to {csv_path}")
+        X_test_adv_np, attacked_idx, sample_results = attack_fraud_samples_only(
+            model=target_model,
+            X_train_np=X_train_np,
+            X_test_np=X_test_np,
+            y_test=y_test,
+            feature_names=feature_names,
+            max_attack_samples=MAX_ATTACK_SAMPLES,
+        )
+
+        adv_metrics, adv_probs, adv_preds = evaluate_model_generic(
+            target_model,
+            X_test_adv_np if is_torch_model(target_model) else pd.DataFrame(X_test_adv_np, columns=feature_names),
+            y_test,
+        )
+
+        asr, successes, attempts = compute_asr(clean_preds, adv_preds, y_test, attacked_idx)
+
+        avg_queries = float(np.mean([r["queries"] for r in sample_results])) if len(sample_results) > 0 else 0.0
+        avg_l2 = float(np.mean([r["l2_dist"] for r in sample_results])) if len(sample_results) > 0 else 0.0
+        avg_linf = float(np.mean([r["linf_dist"] for r in sample_results])) if len(sample_results) > 0 else 0.0
+
+        summary = {
+            "attack_name": ATTACK_NAME,
+            "target_model": target_model_name,
+            "max_attack_samples": int(len(attacked_idx)),
+            "max_iters": int(MAX_ITERS),
+            "learning_rate": float(LEARNING_RATE),
+            "fd_step": float(FD_STEP),
+            "lambda_l2": float(LAMBDA_L2),
+            "coords_per_iter": int(COORDS_PER_ITER),
+
+            "clean_accuracy": float(clean_metrics["accuracy"]),
+            "clean_precision": float(clean_metrics["precision"]),
+            "clean_recall": float(clean_metrics["recall"]),
+            "clean_f1": float(clean_metrics["f1"]),
+            "clean_pr_auc": float(clean_metrics["pr_auc"]),
+            "clean_tn": int(clean_metrics["tn"]),
+            "clean_fp": int(clean_metrics["fp"]),
+            "clean_fn": int(clean_metrics["fn"]),
+            "clean_tp": int(clean_metrics["tp"]),
+
+            "adv_accuracy": float(adv_metrics["accuracy"]),
+            "adv_precision": float(adv_metrics["precision"]),
+            "adv_recall": float(adv_metrics["recall"]),
+            "adv_f1": float(adv_metrics["f1"]),
+            "adv_pr_auc": float(adv_metrics["pr_auc"]),
+            "adv_tn": int(adv_metrics["tn"]),
+            "adv_fp": int(adv_metrics["fp"]),
+            "adv_fn": int(adv_metrics["fn"]),
+            "adv_tp": int(adv_metrics["tp"]),
+
+            "attacked_fraud_samples": int(len(attacked_idx)),
+            "successful_attacks": int(successes),
+            "attack_attempts": int(attempts),
+            "asr": float(asr),
+
+            "avg_queries_per_sample": float(avg_queries),
+            "avg_l2_dist": float(avg_l2),
+            "avg_linf_dist": float(avg_linf),
+        }
+
+        all_summaries.append(summary)
+
+        model_samples_df = pd.DataFrame(sample_results)
+        if not model_samples_df.empty:
+            model_samples_df["attack_name"] = ATTACK_NAME
+            model_samples_df["target_model"] = target_model_name
+            all_sample_rows.append(model_samples_df)
+
+        model_safe = model_slug(target_model_name)
+
+        np.savez_compressed(
+            f"results/attacks/samples/zoo_attack_{model_safe}.npz",
+            X_adv=X_test_adv_np.astype(np.float32),
+            y_test=y_test.astype(np.int32),
+            attacked_idx=np.array(attacked_idx, dtype=np.int32),
+            clean_probs=clean_probs.astype(np.float32),
+            clean_preds=clean_preds.astype(np.int32),
+            adv_probs=adv_probs.astype(np.float32),
+            adv_preds=adv_preds.astype(np.int32),
+            attack_name=np.array(ATTACK_NAME),
+            target_model=np.array(target_model_name),
+            epsilon=np.float32(-1.0),
+        )
+
+        adv_df = pd.DataFrame(X_test_adv_np, columns=feature_names)
+        adv_df.to_csv(
+            f"results/attacks/samples/zoo_attack_{model_safe}.csv",
+            index=False
+        )
+
+        print(f"\nSaved attacked samples to results/attacks/samples/zoo_attack_{model_safe}.npz")
+        print(f"Saved attacked CSV to results/attacks/samples/zoo_attack_{model_safe}.csv")
+        print(f"ASR: {asr:.4f}")
+        print(f"Successful attacks: {successes}")
+        print(f"Attack attempts: {attempts}")
+        print(f"Average queries per sample: {avg_queries:.2f}")
+
+    all_summaries = sorted(all_summaries, key=lambda x: x["target_model"])
+
+    summary_json_path = "results/attacks/zoo_results.json"
+    summary_csv_path = "results/attacks/zoo_results.csv"
+    samples_csv_path = "results/attacks/zoo_sample_results.csv"
+
+    with open(summary_json_path, "w", encoding="utf-8") as f:
+        json.dump(all_summaries, f, indent=4)
+
+    pd.DataFrame(all_summaries).to_csv(summary_csv_path, index=False)
+
+    if all_sample_rows:
+        final_samples_df = pd.concat(all_sample_rows, ignore_index=True)
+        final_samples_df = final_samples_df.sort_values(
+            by=["target_model", "test_index"]
+        ).reset_index(drop=True)
+        final_samples_df.to_csv(samples_csv_path, index=False)
+        print(f"Saved ZOO sample results to {samples_csv_path}")
+
+    print(f"\nSaved ZOO summary results to {summary_json_path}")
+    print(f"Saved ZOO summary CSV to {summary_csv_path}")
 
 
 if __name__ == "__main__":

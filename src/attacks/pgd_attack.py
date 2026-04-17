@@ -23,7 +23,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 1024
 THRESHOLD = 0.9
 
+attack_name = "PGD"
 
+os.makedirs("results/attacks/samples", exist_ok=True)
 
 def set_seed(seed=RANDOM_STATE):
     random.seed(seed)
@@ -198,7 +200,10 @@ def run_pgd_attack():
         else:
             print(f"{k}: {v:.4f}")
 
+    feature_names = pd.read_csv("data/processed/X_test.csv", nrows=1).columns.tolist()
+    
     for epsilon in epsilons:
+        safe_eps = str(epsilon).replace(".", "p")
         print(f"\nRunning PGD with epsilon = {epsilon}, alpha = {alpha}, steps = {num_steps}")
 
         X_test_adv, attacked_idx = attack_fraud_samples_only(
@@ -244,6 +249,29 @@ def run_pgd_attack():
             "attack_attempts": int(attempts),
             "asr": float(asr),
         }
+
+        np.savez_compressed(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz",
+            X_adv=X_test_adv.astype(np.float32),
+            y_test=y_test.astype(np.int32),
+            attacked_idx=np.array(attacked_idx, dtype=np.int32),
+            clean_probs=clean_probs.astype(np.float32),
+            clean_preds=clean_preds.astype(np.int32),
+            adv_probs=adv_probs.astype(np.float32),
+            adv_preds=adv_preds.astype(np.int32),
+            attack_name=np.array(attack_name),
+            epsilon=np.float32(epsilon),
+        )
+
+        adv_df = pd.DataFrame(X_test_adv, columns=feature_names)
+
+        adv_df.to_csv(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv",
+            index=False
+        )
+
+        print(f"Saved attacked samples to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz")
+        print(f"Saved attacked CSV to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv")
 
         all_results.append(result)
 

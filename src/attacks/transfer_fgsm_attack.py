@@ -1,5 +1,3 @@
-# src/attacks/transfer_fgsm_attack.py
-
 import os
 import json
 import random
@@ -24,6 +22,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 THRESHOLD_MLP = 0.9
 BATCH_SIZE = 1024
+
+attack_name = "TRANSFER_FGSM"
+
+os.makedirs("results/attacks/samples", exist_ok=True)
 
 
 def set_seed(seed=RANDOM_STATE):
@@ -139,10 +141,6 @@ def load_target_models():
 # Evaluation helpers
 # =========================================================
 def get_sklearn_scores(model, X_data):
-    """
-    Return continuous scores for PR-AUC.
-    Prefer predict_proba; otherwise use decision_function.
-    """
     if hasattr(model, "predict_proba"):
         probs = model.predict_proba(X_data)[:, 1]
         return probs
@@ -204,11 +202,6 @@ def evaluate_torch_mlp(model, X_data_np, y_data, threshold=THRESHOLD_MLP):
 
 
 def compute_asr(clean_preds, adv_preds, y_true, attacked_idx):
-    """
-    ASR for a target model:
-    among attacked fraud samples that were correctly detected on clean input,
-    how many become non-fraud on adversarial input?
-    """
     if len(attacked_idx) == 0:
         return 0.0, 0, 0
 
@@ -242,30 +235,28 @@ def run_transfer_fgsm():
 
     input_dim = X_train.shape[1]
 
-    # Source model used to craft adversarial samples
     source_mlp = load_source_mlp(input_dim=input_dim)
     print("\nLoaded source MLP from results/saved_models/mlp_torch.pth")
 
-    # Target models to test transferability
     target_models = load_target_models()
     print("Loaded target models:", list(target_models.keys()))
 
-    # Optional: also include source MLP itself as a target for comparison
     include_source_mlp_as_target = True
 
     epsilons = [0.03, 0.05, 0.1]
 
     all_results = []
 
-    # Keep DataFrame for sklearn, NumPy for torch
     X_test_np = X_test.values.astype(np.float32)
+    feature_names = X_test.columns.tolist()
 
     for epsilon in epsilons:
+        safe_eps = str(epsilon).replace(".", "p")
+
         print(f"\n{'=' * 70}")
         print(f"Running transfer FGSM with epsilon = {epsilon}")
         print(f"{'=' * 70}")
 
-        # Generate adversarial examples using the source MLP
         X_test_adv_np, attacked_idx = generate_mlp_fgsm_adversarial_examples(
             model=source_mlp,
             X_test_np=X_test_np,
@@ -273,8 +264,36 @@ def run_transfer_fgsm():
             epsilon=epsilon,
         )
 
-        # Rebuild adversarial DataFrame with same column names for sklearn
         X_test_adv = pd.DataFrame(X_test_adv_np, columns=X_test.columns)
+
+        source_clean_metrics, source_clean_probs, source_clean_preds = evaluate_torch_mlp(
+            source_mlp, X_test_np, y_test
+        )
+        source_adv_metrics, source_adv_probs, source_adv_preds = evaluate_torch_mlp(
+            source_mlp, X_test_adv_np, y_test
+        )
+
+        np.savez_compressed(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz",
+            X_adv=X_test_adv_np.astype(np.float32),
+            y_test=y_test.astype(np.int32),
+            attacked_idx=np.array(attacked_idx, dtype=np.int32),
+            clean_probs=source_clean_probs.astype(np.float32),
+            clean_preds=source_clean_preds.astype(np.int32),
+            adv_probs=source_adv_probs.astype(np.float32),
+            adv_preds=source_adv_preds.astype(np.int32),
+            attack_name=np.array(attack_name),
+            epsilon=np.float32(epsilon),
+        )
+
+        adv_df = pd.DataFrame(X_test_adv_np, columns=feature_names)
+        adv_df.to_csv(
+            f"results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv",
+            index=False
+        )
+
+        print(f"Saved attacked samples to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.npz")
+        print(f"Saved attacked CSV to results/attacks/samples/{attack_name.lower()}_eps_{safe_eps}.csv")
 
         # -------------------------------------------------
         # Evaluate transfer to sklearn target models
