@@ -29,8 +29,8 @@ from src.defences.combined_defence import apply_combined_defence
 # ---------------------------------------------------
 # CHANGE THESE BEFORE EACH RUN
 # ---------------------------------------------------
-VARIANT_LABEL = "without_lr"      # "with_lr" or "without_lr"
-INCLUDE_LR = False              # True or False
+VARIANT_LABEL = "with_lr"      # "with_lr" or "without_lr"
+INCLUDE_LR = True              # True or False
 
 # ---------------------------------------------------
 # SELECT REPRESENTATIVE ATTACK FILES FOR DEFENCE TESTING
