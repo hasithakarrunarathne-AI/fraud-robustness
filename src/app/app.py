@@ -71,35 +71,87 @@ st.set_page_config(
 # ---------------------------------------------------
 # Helpers
 # ---------------------------------------------------
+# # Due to deployment issues with loading the full processed data, switched to a more focused loading of just the test set and labels.  The original loading code is left here for reference.
+# @st.cache_resource
+# def load_mlp_model_and_data():
+#     X_train, X_test, y_train, y_test = load_processed_data(
+#         processed_dir=str(PROJECT_ROOT / "data" / "processed")
+#     )
+#     input_dim = X_train.shape[1]
+
+#     model = FraudMLP(input_dim).to(DEVICE)
+#     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+#     model.eval()
+
+#     return model, X_train, X_test, y_train, y_test
+
+
+# @st.cache_data
+# def get_clean_mlp_stats():
+#     model, X_train, X_test, y_train, y_test = load_mlp_model_and_data()
+#     metrics = evaluate_model(model, X_test, y_test)
+#     return metrics
+
+
+# @st.cache_data
+# def get_total_test_samples():
+#     _, X_test, _, y_test = load_processed_data(
+#         processed_dir=str(PROJECT_ROOT / "data" / "processed")
+#     )
+#     _ = y_test
+#     return len(X_test)
+
+#due to deployment issues with loading the full processed data, switched to a more focused loading of just the test set and labels.  
+
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+X_TEST_PATH = PROCESSED_DIR / "X_test.csv"
+Y_TEST_PATH = PROCESSED_DIR / "y_test.csv"
+
+
+@st.cache_data
+def load_test_data_only():
+    X_test = pd.read_csv(X_TEST_PATH)
+
+    y_test = pd.read_csv(Y_TEST_PATH)
+
+    # make y_test 1D
+    if isinstance(y_test, pd.DataFrame):
+        if y_test.shape[1] == 1:
+            y_test = y_test.iloc[:, 0]
+        else:
+            y_test = y_test.squeeze()
+
+    X_test = X_test.values.astype(np.float32)
+    y_test = np.asarray(y_test).astype(np.int64)
+
+    return X_test, y_test
+
+
 @st.cache_resource
 def load_mlp_model_and_data():
-    X_train, X_test, y_train, y_test = load_processed_data(
-        processed_dir=str(PROJECT_ROOT / "data" / "processed")
-    )
-    input_dim = X_train.shape[1]
+    X_test, y_test = load_test_data_only()
+    input_dim = X_test.shape[1]
 
     model = FraudMLP(input_dim).to(DEVICE)
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
 
-    return model, X_train, X_test, y_train, y_test
+    return model, X_test, y_test
 
 
 @st.cache_data
 def get_clean_mlp_stats():
-    model, X_train, X_test, y_train, y_test = load_mlp_model_and_data()
+    model, X_test, y_test = load_mlp_model_and_data()
     metrics = evaluate_model(model, X_test, y_test)
     return metrics
 
 
 @st.cache_data
 def get_total_test_samples():
-    _, X_test, _, y_test = load_processed_data(
-        processed_dir=str(PROJECT_ROOT / "data" / "processed")
-    )
-    _ = y_test
+    X_test, _ = load_test_data_only()
     return len(X_test)
 
+# due to deployment issues with loading the full processed data, switched to a more focused loading of just the test set and labels.
 
 @st.cache_data
 def load_attack_results(path: str):
