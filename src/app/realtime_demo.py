@@ -164,6 +164,72 @@ def plot_conf_matrix(y_true: np.ndarray, preds: np.ndarray, title: str):
     plt.tight_layout()
     st.pyplot(fig)
 
+def plot_defence_review_breakdown(successful_attacks_before: int, caught_by_defence: int, total_review_flags: int):
+    extra_review_flags = max(0, total_review_flags - caught_by_defence)
+
+    labels = [
+        "Successful\nAttacks",
+        "Caught\nSuccessful Attacks",
+        "Extra Review\nFlags",
+        "Total Review\nFlags",
+    ]
+
+    values = [
+        int(successful_attacks_before),
+        int(caught_by_defence),
+        int(extra_review_flags),
+        int(total_review_flags),
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 3.8))
+    bars = ax.bar(labels, values)
+
+    ax.set_title("Defence Review Breakdown")
+    ax.set_ylabel("Count")
+    ax.grid(axis="y", alpha=0.3)
+
+    max_value = max(values) if values else 0
+    ax.set_ylim(0, max(1, max_value * 1.25))
+
+    for bar, value in zip(bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            str(value),
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+        )
+
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+def plot_review_rate(review_rate: float):
+    review_percent = review_rate * 100
+
+    fig, ax = plt.subplots(figsize=(7.5, 3.2))
+    bars = ax.bar(["Review Rate"], [review_percent])
+
+    ax.set_title("Manual Review Rate")
+    ax.set_ylabel("Rate (%)")
+    ax.set_ylim(0, max(10, review_percent * 1.5))
+    ax.grid(axis="y", alpha=0.3)
+
+    for bar in bars:
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{review_percent:.2f}%",
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+        )
+
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
 
 def run_subset_defence(
     mlp_model,
@@ -511,21 +577,40 @@ with right:
 # Defence summary
 # -------------------------------------------------
 st.markdown("---")
-sum1, sum2 = st.columns(2)
+st.subheader("Defence Trigger Summary")
 
-with sum1:
-    st.subheader("Defence Trigger Summary")
-    st.write(f"**Noise triggers:** {defence_summary['noise_trigger_count']}")
-    st.write(f"**Disagreement triggers:** {defence_summary['disagreement_trigger_count']}")
-    st.write(f"**Total review flags:** {int(review_flags.sum())}")
-    st.write(f"**Review rate:** {review_rate:.2%}")
+summary_left, summary_right = st.columns([1.25, 1.0])
 
-with sum2:
+with summary_left:
+    chart1, chart2 = st.columns(2)
+
+    with chart1:
+        plot_defence_review_breakdown(
+            successful_attacks_before=successful_attacks_before,
+            caught_by_defence=caught_by_defence,
+            total_review_flags=int(review_flags.sum()),
+        )
+
+    with chart2:
+        plot_review_rate(review_rate=review_rate)
+
+with summary_right:
     st.subheader("Interpretation")
     st.write("- **Clean** shows normal fraud detection performance.")
     st.write("- **Attacked** shows what happens after adversarial perturbation.")
     st.write("- **Defended** shows performance after review-based defence is applied.")
     st.write("- A useful defence should reduce missed fraud without causing excessive review burden.")
+
+    extra_review_flags = max(0, int(review_flags.sum()) - caught_by_defence)
+
+    st.info(
+        f"Successful attacks: {successful_attacks_before} | "
+        f"Caught successful attacks: {caught_by_defence} | "
+        f"Extra review flags: {extra_review_flags} | "
+        f"Total review flags: {int(review_flags.sum())} | "
+        f"Review rate: {review_rate:.2%}"
+    )
+
 
 # -------------------------------------------------
 # Three confusion matrices
