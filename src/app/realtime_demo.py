@@ -352,7 +352,7 @@ subset_source = st.sidebar.selectbox(
     ["All", "Fraud only", "Legitimate only"],
 )
 
-subset_size = st.sidebar.selectbox("Subset size", [25, 50, 100], index=1)
+subset_size = st.sidebar.selectbox("Subset size", [25, 50, 100,200,500], index=1)
 
 start_pos = 0
 random_seed = st.sidebar.number_input(

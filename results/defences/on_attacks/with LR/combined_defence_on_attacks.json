@@ -1,0 +1,19 @@
+[
+    {
+        "attack_name": "FGSM",
+        "epsilon": 0.10000000149011612,
+        "successful_attacks_before_defence": 2,
+        "successful_attacks_caught_by_defence": 2,
+        "defence_catch_rate": 1.0,
+        "review_rate": 0.029482254255806577,
+        "adv_precision_before": 0.8765432098765432,
+        "adv_recall_before": 0.7473684210526316,
+        "adv_f1_before": 0.8068181818181818,
+        "adv_pr_auc_before": 0.7340994509716007,
+        "defended_precision_after": 0.04888103651354535,
+        "defended_recall_after": 0.8736842105263158,
+        "defended_f1_after": 0.09258226436140547,
+        "defended_pr_auc_after": 0.03330363509859296,
+        "defence_name": "Combined"
+    }
+]
